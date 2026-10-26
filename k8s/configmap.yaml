@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: order-manager-config
+data:
+  SPRING_PROFILES_ACTIVE: docker
+  DB_HOST: postgres
+  DB_PORT: "5432"
+  DB_NAME: orderdb
+  DB_USER: orders
+  DB_POOL_SIZE: "10"
+  APP_VERSION: dev
+  GIT_COMMIT: unknown

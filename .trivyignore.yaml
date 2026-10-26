@@ -1,0 +1,15 @@
+vulnerabilities:
+  - id: CVE-2026-47884
+    statement: >-
+      No aplica: requiere el uso de XsltView con renderizado de vistas.
+      order-manager es una API REST (@RestController) que solo serializa JSON;
+      no usa vistas, XSLT ni plantillas. La corrección solo existe en
+      Spring Framework 7 (Spring Boot 4), migración planificada.
+    expired_at: 2027-01-31
+
+  - id: CVE-2026-47890
+    statement: >-
+      No aplica: afecta Server-Sent Events con fragmentos de vista.
+      La API no expone endpoints SSE ni usa vistas.
+      Corrección solo en Spring Framework 7 (Spring Boot 4).
+    expired_at: 2027-01-31

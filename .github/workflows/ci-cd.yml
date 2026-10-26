@@ -1,0 +1,406 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["docs/**", "**.md"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  JAVA_VERSION: "17"
+  JAVA_DISTRIBUTION: temurin
+  REGISTRY: ghcr.io
+  TRIVY_SEVERITY: HIGH,CRITICAL
+
+jobs:
+
+  test:
+    name: "1 · Pruebas (JUnit + JaCoCo)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      tests: ${{ steps.report.outputs.tests }}
+      failures: ${{ steps.report.outputs.failures }}
+      coverage: ${{ steps.report.outputs.coverage }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6
+        with:
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+
+      - name: Compilar, probar y validar cobertura
+        run: mvn -B -ntp verify
+
+      - name: Resumen de pruebas
+        id: report
+        if: always()
+        shell: python
+        run: |
+          import csv, glob, os
+          import xml.etree.ElementTree as ET
+          tests = fail = err = skip = 0
+          for f in glob.glob("target/surefire-reports/TEST-*.xml"):
+              r = ET.parse(f).getroot()
+              tests += int(r.get("tests", 0)); fail += int(r.get("failures", 0))
+              err += int(r.get("errors", 0));  skip += int(r.get("skipped", 0))
+          cov = "n/d"
+          if os.path.exists("target/site/jacoco/jacoco.csv"):
+              rows = list(csv.DictReader(open("target/site/jacoco/jacoco.csv")))
+              miss = sum(int(r["LINE_MISSED"]) for r in rows)
+              hit = sum(int(r["LINE_COVERED"]) for r in rows)
+              cov = f"{100 * hit / (hit + miss):.1f}%"
+          with open(os.environ["GITHUB_OUTPUT"], "a") as o:
+              o.write(f"tests={tests}\nfailures={fail + err}\ncoverage={cov}\n")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as s:
+              result = "APROBADO" if fail + err == 0 and tests > 0 else "FALLIDO"
+              s.write(f"### Pruebas automatizadas: {result}\n")
+              s.write("| Total | Fallidas | Errores | Omitidas | Cobertura de líneas (mín. 80%) |\n")
+              s.write("|---|---|---|---|---|\n")
+              s.write(f"| {tests} | {fail} | {err} | {skip} | {cov} |\n")
+
+      - name: Publicar reportes (JUnit + JaCoCo)
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: test-reports-${{ github.sha }}
+          path: |
+            target/surefire-reports/
+            target/site/jacoco/
+          retention-days: 30
+
+  sast:
+    name: "2 · SAST (SonarQube Cloud)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6
+        with:
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+
+      - name: Análisis SonarQube + Quality Gate
+        if: env.SONAR_TOKEN != ''
+        run: >
+          mvn -B -ntp verify sonar:sonar
+          -Dsonar.organization=${{ vars.SONAR_ORGANIZATION || github.repository_owner }}
+          -Dsonar.projectKey=${{ vars.SONAR_PROJECT_KEY || format('{0}_{1}', github.repository_owner, github.event.repository.name) }}
+
+      - name: SonarQube no configurado
+        if: env.SONAR_TOKEN == ''
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            echo "::warning title=SAST omitido::El PR no tiene acceso a SONAR_TOKEN (fork o Dependabot). El análisis se ejecuta al integrar en main."
+            echo "### SAST omitido en PR: sin acceso al secret \`SONAR_TOKEN\`" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::error title=SAST obligatorio::Falta el secret SONAR_TOKEN. Ver README, sección Configuración del repositorio."
+            echo "### SAST bloqueado: falta el secret \`SONAR_TOKEN\`" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+  dependency-review:
+    name: "Dependabot · Revisión de dependencias del PR"
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Bloquear dependencias con vulnerabilidades conocidas (GitHub Advisory Database)
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294
+        with:
+          fail-on-severity: high
+          comment-summary-in-pr: on-failure
+
+  sca:
+    name: "3 · SCA (Trivy fs)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
+    env:
+      TRIVY_IGNOREFILE: .trivyignore.yaml
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6
+        with:
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+
+      - name: Resolver dependencias Maven
+        run: mvn -B -ntp -q dependency:resolve
+
+      - name: Trivy fs → SARIF (pestaña Security)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret,misconfig
+          severity: ${{ env.TRIVY_SEVERITY }}
+          ignore-unfixed: true
+          format: sarif
+          output: trivy-fs.sarif
+          exit-code: "0"
+
+      - name: Subir hallazgos a GitHub Security
+        if: always() && hashFiles('trivy-fs.sarif') != ''
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2
+        with:
+          sarif_file: trivy-fs.sarif
+          category: trivy-fs
+
+      - name: Gate de seguridad (bloquea si hay HIGH/CRITICAL)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
+        env:
+          TRIVY_SKIP_DB_UPDATE: "true"
+          TRIVY_SKIP_CHECK_UPDATE: "true"
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret,misconfig
+          severity: ${{ env.TRIVY_SEVERITY }}
+          ignore-unfixed: true
+          format: table
+          exit-code: "1"
+          skip-setup-trivy: true
+
+  k8s:
+    name: "Kubernetes · Validación de manifiestos"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      KUBECONFORM_VERSION: v0.6.7
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Instalar kubeconform
+        run: |
+          curl -fsSL "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" \
+            | tar -xz -C "$RUNNER_TEMP" kubeconform
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/kubeconform" -v
+
+      - name: Renderizar (kustomize) y validar contra el esquema de Kubernetes
+        run: |
+          kubectl kustomize k8s > rendered.yaml
+          kubeconform -strict -summary -kubernetes-version 1.30.0 rendered.yaml
+
+  build:
+    name: "4 · Imagen Docker (build, scan, push)"
+    needs: [test, sast, sca, k8s]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+    env:
+      TRIVY_IGNOREFILE: .trivyignore.yaml
+    outputs:
+      image: ${{ steps.vars.outputs.image }}
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Variables de trazabilidad
+        id: vars
+        run: |
+          echo "image=${REGISTRY}/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+          echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          echo "version=1.0.0-run.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+
+      - name: Metadatos de imagen (tags + labels OCI)
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302
+        with:
+          images: ${{ steps.vars.outputs.image }}
+          tags: |
+            type=raw,value=${{ github.sha }}
+            type=sha,prefix=sha-
+            type=ref,event=pr
+            type=raw,value=latest,enable={{is_default_branch}}
+          labels: |
+            org.opencontainers.image.title=order-manager
+            org.opencontainers.image.version=${{ steps.vars.outputs.version }}
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+
+      - name: Construir imagen (local, para escanear antes de publicar)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        with:
+          context: .
+          load: true
+          push: false
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ steps.vars.outputs.version }}
+            VCS_REF=${{ github.sha }}
+            BUILD_DATE=${{ steps.vars.outputs.build_date }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Trivy imagen → SARIF
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
+        with:
+          image-ref: ${{ steps.vars.outputs.image }}:${{ github.sha }}
+          severity: ${{ env.TRIVY_SEVERITY }}
+          ignore-unfixed: true
+          format: sarif
+          output: trivy-image.sarif
+          exit-code: "0"
+
+      - name: Subir hallazgos a GitHub Security
+        if: always() && hashFiles('trivy-image.sarif') != ''
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2
+        with:
+          sarif_file: trivy-image.sarif
+          category: trivy-image
+
+      - name: Gate de seguridad de imagen (bloquea si hay HIGH/CRITICAL)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
+        env:
+          TRIVY_SKIP_DB_UPDATE: "true"
+        with:
+          image-ref: ${{ steps.vars.outputs.image }}:${{ github.sha }}
+          severity: ${{ env.TRIVY_SEVERITY }}
+          ignore-unfixed: true
+          format: table
+          exit-code: "1"
+          skip-setup-trivy: true
+
+      - name: Login en GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publicar imagen en GHCR
+        id: push
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ steps.vars.outputs.version }}
+            VCS_REF=${{ github.sha }}
+            BUILD_DATE=${{ steps.vars.outputs.build_date }}
+          cache-from: type=gha
+
+      - name: Resumen de imagen
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          {
+            echo "### Imagen Docker"
+            echo "| Campo | Valor |"
+            echo "|---|---|"
+            echo "| Tags | \`$(echo "$TAGS" | tr '\n' ' ')\` |"
+            echo "| Digest | \`${DIGEST:-no publicado (pull request)}\` |"
+            echo "| Escaneo Trivy | sin vulnerabilidades ${TRIVY_SEVERITY} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  deploy-staging:
+    name: "5 · Deploy staging"
+    needs: [test, build]
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/deploy.yml
+    with:
+      environment: staging
+      image: ${{ needs.build.outputs.image }}:${{ github.sha }}
+      replicas: 1
+      tests: ${{ needs.test.outputs.tests }}
+      coverage: ${{ needs.test.outputs.coverage }}
+
+  deploy-production:
+    name: "6 · Deploy producción"
+    needs: [test, build, deploy-staging]
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/deploy.yml
+    with:
+      environment: produccion-simulada
+      image: ${{ needs.build.outputs.image }}:${{ github.sha }}
+      replicas: 2
+      tests: ${{ needs.test.outputs.tests }}
+      coverage: ${{ needs.test.outputs.coverage }}
+
+  security-alert:
+    name: "Alerta de seguridad"
+    needs: [sast, sca, build]
+    if: >-
+      always() && github.event_name != 'pull_request' &&
+      (needs.sast.result == 'failure' || needs.sca.result == 'failure' || needs.build.result == 'failure')
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Crear o actualizar issue de seguridad
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RESULTS: "SAST=${{ needs.sast.result }} · SCA=${{ needs.sca.result }} · Imagen=${{ needs.build.result }}"
+        run: |
+          gh label create security-gate --color B60205 --description "Pipeline bloqueado por seguridad" --force
+          body="El pipeline fue **bloqueado** por un control de seguridad en \`${GITHUB_SHA:0:7}\`.
+
+          - Resultados: ${RESULTS}
+          - Ejecución: ${RUN_URL}
+          - Revisar la pestaña **Security → Code scanning** para el detalle."
+          existing=$(gh issue list --label security-gate --state open --json number --jq '.[0].number')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "Pipeline bloqueado por control de seguridad" --label security-gate --body "$body"
+          fi
