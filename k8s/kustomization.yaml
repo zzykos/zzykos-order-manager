@@ -18,5 +18,5 @@ resources:
 
 images:
   - name: order-manager
-    newName: ghcr.io/owner/order-manager
+    newName: ghcr.io/zzykos/zzykos-order-manager
     newTag: latest
