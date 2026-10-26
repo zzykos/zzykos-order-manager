@@ -1,4 +1,4 @@
-> **Asignatura:** DOY0101 Ingeniería DevOps **Autor:** (tu nombre) **Repositorio Base:** https://github.com/iam-docente/order-manager
+> **Asignatura:** DOY0101 Ingeniería DevOps **Autor:** Jairo Omar Moraga Rodriguez **Repositorio Base:** https://github.com/iam-docente/order-manager
 
 Order Manager es un microservicio diseñado para la gestión de pedidos, construido como una API REST utilizando Spring Boot 3.5 y Java 17.
 
