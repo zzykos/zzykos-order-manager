@@ -1,10 +1,10 @@
 # Order Manager
 
-> **Asignatura:** DOY0101 Ingeniería DevOps **Autor:** Jairo Omar Moraga Rodriguez **Repositorio Base:** [https://github.com/iam-docente/order-manager](https://github.com/iam-docente/order-manager)
+> **Asignatura:** DOY0101 Ingeniería DevOps **Estudiante:** Jairo Omar Moraga Rodriguez **Repositorio Base:** [https://github.com/iam-docente/order-manager](https://github.com/iam-docente/order-manager)
 
 Order Manager es un microservicio diseñado para la gestión de pedidos, construido como una API REST utilizando Spring Boot 3.5 y Java 17.
 
-Este repositorio contiene no solo el código fuente de la aplicación (desarrollado inicialmente en fases previas), sino que implementa toda la infraestructura DevOps necesaria para su ciclo de vida: contenerización optimizada, un pipeline de integración y entrega continua (CI/CD), políticas de seguridad estrictas y orquestación para su despliegue.
+Este repositorio implementa toda la infraestructura DevOps necesaria para el ciclo de vida de la aplicación: contenerización optimizada, un pipeline de integración y entrega continua (CI/CD), políticas de seguridad estrictas y orquestación para su despliegue.
 
 ## Índice
 
@@ -13,13 +13,13 @@ Este repositorio contiene no solo el código fuente de la aplicación (desarroll
 - [Estructura del Proyecto](#estructura-del-proyecto)
 - [Arquitectura y Contenerización](#arquitectura-y-contenerizaci%C3%B3n)
 - [Pipeline CI/CD](#pipeline-cicd)
-- [Pruebas y Calidad de Código](#pruebas-y-calidad-de-c%C3%B3digo)
+- [Pruebas](#pruebas)
 - [Seguridad y Escalabilidad](#seguridad-y-escalabilidad)
 - [Trazabilidad y Despliegue](#trazabilidad-y-despliegue)
 - [Orquestación](#orquestaci%C3%B3n)
 - [Evidencias del Proyecto](#evidencias-del-proyecto)
 - [Declaración de uso de IA](#declaraci%C3%B3n-de-uso-de-ia)
-- [Conclusiones y Reflexión Individual](#conclusiones-y-reflexi%C3%B3n-individual)
+- [Conclusión y Reflexión](#conclusiones-y-reflexi%C3%B3n-individual)
 
 ## Ejecución Local
 
@@ -151,7 +151,6 @@ curl http://localhost:8098/api/orders/status/CONFIRMED
 └── pom.xml                   # Dependencias, JaCoCo y SonarCloud
 ```
 
-El detalle de cada etapa del desarrollo está documentado en `docs/fases`, desde la fundación del proyecto hasta la documentación final.
 
 ## Arquitectura y Contenerización
 
@@ -194,11 +193,11 @@ Las etapas de verificación (pruebas, SAST, SCA y validación de Kubernetes) cor
 |Deploy staging y producción simulada|Sí|No|
 |Issue automático de seguridad|Sí|No|
 
-## Pruebas y Calidad de Código
+## Pruebas
 
-El proyecto hace un fuerte énfasis en la calidad y fiabilidad de cada entrega. El pipeline ejecuta de manera automatizada **55 pruebas** (unitarias, de controlador e integración) construidas con JUnit.
+El pipeline ejecuta de manera automatizada **55 pruebas** (unitarias, de controlador e integración) construidas con JUnit.
 
-- **Cobertura:** A través de JaCoCo (configurado en el `pom.xml`), el sistema exige un mínimo del 80% de cobertura. Si este umbral no se alcanza, el pipeline se bloquea. Al cierre de esta entrega, la cobertura era del **94.6%**, con 0 pruebas fallidas; el valor actualizado puede consultarse en el último análisis de SonarCloud.
+- **Cobertura:** A través de JaCoCo (configurado en el `pom.xml`), el sistema exige un mínimo del 80% de cobertura. Si este porcentaje no se alcanza, el pipeline se bloquea. Al cierre de esta entrega, la cobertura era del **94.6%**, con 0 pruebas fallidas; el valor actualizado puede consultarse en el último análisis de SonarCloud.
 - **Pruebas de Humo (Smoke Tests):** Una vez desplegada la aplicación, el script `scripts/smoke-test.sh` se ejecuta contra el entorno en vivo para confirmar que la API responde a tráfico real. Todos los reportes de calidad se almacenan como _artifacts_ en las ejecuciones de GitHub Actions.
 
 ## Seguridad y Escalabilidad
@@ -206,26 +205,18 @@ El proyecto hace un fuerte énfasis en la calidad y fiabilidad de cada entrega. 
 **Políticas de Seguridad:**
 
 - **Dependabot:** Ejecuta revisiones programadas (cada lunes) para mantener actualizadas las dependencias de Maven, Docker y GitHub Actions.
-- **Análisis de Vulnerabilidades:** Trivy detiene inmediatamente el pipeline si detecta vulnerabilidades de nivel `HIGH` o `CRITICAL`. Se cuenta con un archivo `.trivyignore.yaml` que excluye temporalmente (hasta el 2027-01-31) 2 CVEs específicos que no aplican al contexto de esta aplicación.
 - **Hardening de Contenedores:** Los contenedores corren en modo `read_only`, pierden capacidades innecesarias de sistema (`cap_drop ALL`), utilizan redes internas aisladas y se les asigna una contraseña de base de datos aleatoria por despliegue.
-- **Bloqueos Automáticos:** Si SAST o SCA fallan, se genera un _Issue_ automático con la etiqueta `security-gate`. (Por ejemplo, el [Issue #4](https://github.com/zzykos/zzykos-order-manager/issues/4) que reportaba la ausencia del `SONAR_TOKEN`, resuelto al inyectar el secreto en la configuración del repositorio).
+- **Bloqueos Automáticos:** Si SAST o SCA fallan, se genera un _Issue_ automático con la etiqueta `security-gate`.
 
 **Estrategia de Escalabilidad:**
 
 - La arquitectura soporta múltiples réplicas (1 en staging, 2 en producción) balanceadas a través de un API Gateway configurado con **Nginx**.
-- Se implementaron límites estrictos de CPU y memoria por servicio en `docker-compose.yml`.
-- Para despliegues nativos de nube, los manifiestos de Kubernetes incluyen políticas de Autoescalado Horizontal (HPA), configuradas para variar dinámicamente entre 2 y 6 réplicas según el consumo de recursos.
+- Se implementaron límites de CPU y memoria por servicio en `docker-compose.yml`.
+
 
 ## Trazabilidad y Despliegue
 
 Se implementó un entorno _cloud simulado_ utilizando Docker Compose corriendo directamente en los _runners_ de GitHub Actions. En la sección de [_Deployments_](https://github.com/zzykos/zzykos-order-manager/deployments) del repositorio se puede observar el estado de los dos entornos principales: **staging** y **produccion-simulada**.
-
-**Cadena de Trazabilidad Total:**
-
-1. Todo cambio se origina en un **Commit**.
-2. GitHub Actions captura el **SHA** de ese commit.
-3. La imagen Docker se etiqueta con ese **SHA**.
-4. En tiempo de ejecución, consultar el endpoint `/actuator/info` expone públicamente la información del commit, permitiendo saber en todo momento qué versión exacta del código está corriendo en cada entorno.
 
 Ejemplo de respuesta:
 
@@ -252,11 +243,7 @@ La infraestructura de servicios está definida en `docker-compose.yml` e integra
 - **app:** Instancias del microservicio Order Manager.
 - **gateway:** Proxy reverso Nginx.
 
-Estos servicios cuentan con _healthchecks_ internos y directivas `depends_on` para asegurar el orden correcto de arranque y reinicios automáticos en caso de fallos.
-
 ### Kubernetes
-
-Adicionalmente, el directorio `/k8s` contiene los manifiestos, organizados con Kustomize, listos para migrar a un clúster de Kubernetes real: Namespace, ConfigMap, StatefulSet de PostgreSQL, Deployment y Service de la aplicación, HPA, PodDisruptionBudget y NetworkPolicies.
 
 **Requisitos del clúster:** Kubernetes 1.30 o superior y [metrics-server](https://github.com/kubernetes-sigs/metrics-server) instalado, necesario para que el HPA pueda escalar según el consumo.
 
@@ -300,7 +287,3 @@ En cuanto a las dificultades técnicas, el mayor desafío fue configurar correct
 ### Mejoras futuras
 
 En el futuro, me gustaría agregar herramientas de monitoreo adicionales para tener mayor visibilidad de la infraestructura y optimizar aún más el código del servicio.
-
----
-
-Proyecto académico desarrollado para la asignatura DOY0101 Ingeniería DevOps, a partir del [repositorio base](https://github.com/iam-docente/order-manager) entregado por el docente.
