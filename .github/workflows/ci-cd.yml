@@ -16,7 +16,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  JAVA_VERSION: "17"
+  JAVA_VERSION: "25"
   JAVA_DISTRIBUTION: temurin
   REGISTRY: ghcr.io
   TRIVY_SEVERITY: HIGH,CRITICAL

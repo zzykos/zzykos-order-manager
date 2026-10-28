@@ -2,7 +2,7 @@
 
 > **Asignatura:** DOY0101 Ingeniería DevOps **Autor:** Jairo Omar Moraga Rodriguez **Repositorio Base:** [https://github.com/iam-docente/order-manager](https://github.com/iam-docente/order-manager)
 
-Order Manager es un microservicio diseñado para la gestión de pedidos, construido como una API REST utilizando Spring Boot 3.5 y Java 17.
+Order Manager es un microservicio diseñado para la gestión de pedidos, construido como una API REST utilizando Spring Boot 3.5 y Java 25.
 
 Este repositorio contiene no solo el código fuente de la aplicación (desarrollado inicialmente en fases previas), sino que implementa toda la infraestructura DevOps necesaria para su ciclo de vida: contenerización optimizada, un pipeline de integración y entrega continua (CI/CD), políticas de seguridad estrictas y orquestación para su despliegue.
 
@@ -27,7 +27,7 @@ Este repositorio contiene no solo el código fuente de la aplicación (desarroll
 
 |Herramienta|Versión|
 |---|---|
-|Java (JDK)|17|
+|Java (JDK)|25|
 |Maven|3.9 o superior|
 |Docker|24 o superior, con Docker Compose v2|
 
@@ -159,7 +159,7 @@ Para garantizar que la aplicación se ejecute de manera idéntica en cualquier e
 
 **Características de la imagen:**
 
-- **Base ultraligera:** Se utiliza `eclipse-temurin:17-jre-alpine`, que provee un entorno Java (JRE) sobre Alpine Linux, reduciendo drásticamente el peso de la imagen y la superficie de ataque.
+- **Base ultraligera:** Se utiliza `eclipse-temurin:25-jre-alpine`, que provee un entorno Java (JRE) sobre Alpine Linux, reduciendo drásticamente el peso de la imagen y la superficie de ataque.
 - **Seguridad:** El contenedor se ejecuta mediante un usuario sin privilegios llamado `appuser`, evitando el uso de `root`.
 - **Monitoreo:** Integra un `HEALTHCHECK` que consulta periódicamente el endpoint `/actuator/health/liveness` para verificar la salud del servicio.
 - **Trazabilidad:** Cada imagen es etiquetada de forma automática con el hash del commit (`org.opencontainers.image.revision`).

@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-FROM maven:3.9-eclipse-temurin-17 AS build
+FROM maven:3.9-eclipse-temurin-25 AS build
 WORKDIR /workspace
 
 COPY pom.xml .
@@ -12,12 +12,12 @@ RUN --mount=type=cache,target=/root/.m2 \
     mvn -B -q package -DskipTests -Djacoco.skip=true \
  && cp target/order-manager-*.jar app.jar
 
-FROM eclipse-temurin:17-jre-alpine AS extract
+FROM eclipse-temurin:25-jre-alpine AS extract
 WORKDIR /extract
 COPY --from=build /workspace/app.jar app.jar
 RUN java -Djarmode=layertools -jar app.jar extract
 
-FROM eclipse-temurin:17-jre-alpine AS runtime
+FROM eclipse-temurin:25-jre-alpine AS runtime
 
 ARG VERSION=dev
 ARG VCS_REF=unknown
