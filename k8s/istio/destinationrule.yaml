@@ -9,6 +9,8 @@ spec:
       mode: ISTIO_MUTUAL
     loadBalancer:
       simple: LEAST_REQUEST
+      localityLbSetting:
+        enabled: false
     connectionPool:
       tcp:
         maxConnections: 100

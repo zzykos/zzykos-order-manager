@@ -89,12 +89,30 @@ ensure_namespace_and_secret() {
   log_info "secreto order-manager-db creado"
 }
 
+wait_for_stable_replicas() {
+  local min deadline desired updated available ready
+  min="$(kubectl -n "$APP_NAMESPACE" get hpa order-manager -o jsonpath='{.spec.minReplicas}' 2>/dev/null || true)"
+  min="${min:-1}"
+  deadline=$(( $(date +%s) + ${STABILIZE_TIMEOUT:-300} ))
+  while true; do
+    read -r desired updated available ready < <(kubectl -n "$APP_NAMESPACE" get deployment order-manager \
+      -o jsonpath='{.status.replicas} {.status.updatedReplicas} {.status.availableReplicas} {.status.readyReplicas}{"\n"}')
+    if (( ${available:-0} >= min && ${updated:-0} == ${desired:-0} && ${ready:-0} == ${desired:-0} )); then
+      log_info "replicas estables: $available disponibles de $desired (minimo HPA $min), todas en la nueva revision"
+      return 0
+    fi
+    (( $(date +%s) < deadline )) || die "las replicas no se estabilizaron (deseadas=$desired actualizadas=$updated disponibles=$available minimo=$min)"
+    sleep 5
+  done
+}
+
 apply_manifests() {
   kubectl apply -f "$OUTPUT" || die "kubectl apply fallo"
   kubectl -n "$APP_NAMESPACE" rollout status statefulset/postgres --timeout="$ROLLOUT_TIMEOUT" \
     || die "rollout de postgres no completado"
   kubectl -n "$APP_NAMESPACE" rollout status deployment/order-manager --timeout="$ROLLOUT_TIMEOUT" \
     || die "rollout de order-manager no completado"
+  wait_for_stable_replicas
   kubectl -n "$APP_NAMESPACE" get pods -o wide
 }
 
