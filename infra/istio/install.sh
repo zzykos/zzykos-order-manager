@@ -7,7 +7,7 @@ usage() {
   cat <<'USAGE'
 Uso: infra/istio/install.sh
 
-Instala Istio (version de infra/versions.env) con el perfil demo, recursos minimos,
+Instala Istio (version de infra/versions.conf) con el perfil demo, recursos minimos,
 Istio CNI (compatible con Pod Security restricted) y telemetria de malla.
 
 Variables de entorno:

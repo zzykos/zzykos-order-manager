@@ -7,7 +7,7 @@ usage() {
   cat <<'USAGE'
 Uso: install-tools.sh HERRAMIENTA [HERRAMIENTA...]
 
-Instala binarios con version fijada en infra/versions.env y verificacion SHA-256.
+Instala binarios con version fijada en infra/versions.conf y verificacion SHA-256.
 
 Herramientas: istioctl, kustomize, conftest, eksctl
 

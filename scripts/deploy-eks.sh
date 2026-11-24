@@ -15,7 +15,7 @@ Variables de entorno:
   IMAGE             Imagen inmutable a desplegar, por ejemplo ghcr.io/org/repo:<sha> (obligatoria)
   GIT_COMMIT        Commit desplegado (obligatoria)
   APP_VERSION       Version de la aplicacion (por defecto 1.0.0-<commit corto>)
-  APP_NAMESPACE     Namespace de la aplicacion (por defecto infra/versions.env)
+  APP_NAMESPACE     Namespace de la aplicacion (por defecto infra/versions.conf)
   ROLLOUT_TIMEOUT   Tiempo maximo de rollout (por defecto 300s)
 USAGE
 }

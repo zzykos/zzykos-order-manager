@@ -49,7 +49,7 @@ require_env() {
 }
 
 load_versions() {
-  local file="$REPO_ROOT/infra/versions.env" line key value
+  local file="$REPO_ROOT/infra/versions.conf" line key value
   [[ -r "$file" ]] || die "no se puede leer $file" 2
   while IFS= read -r line || [[ -n "$line" ]]; do
     [[ -z "$line" ]] && continue

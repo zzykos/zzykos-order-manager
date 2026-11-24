@@ -13,7 +13,7 @@ el pipeline y activa el rollback.
 
 Variables de entorno:
   REVISION            Revision desplegada (label app.kubernetes.io/version, obligatoria)
-  APP_NAMESPACE       Namespace de la aplicacion (por defecto infra/versions.env)
+  APP_NAMESPACE       Namespace de la aplicacion (por defecto infra/versions.conf)
   LOAD_SECONDS        Duracion de la carga (por defecto 60)
   LOAD_CONCURRENCY    Clientes concurrentes (por defecto 4)
   MIN_REQUESTS        Solicitudes minimas observadas en Prometheus (por defecto 50)

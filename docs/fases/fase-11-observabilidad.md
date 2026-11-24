@@ -39,7 +39,7 @@ CloudWatch: alarmas ──► SNS ──► correo del equipo
 ## Decisiones de diseño
 
 - **Istio CNI en lugar del init container privilegiado.** El namespace `order-manager` aplica el Pod Security Standard `restricted`, que no admite las capacidades `NET_ADMIN` y `NET_RAW` del `istio-init` tradicional. Con el plugin CNI, la configuración de iptables corre en el nodo y los pods siguen cumpliendo `restricted`.
-- **Misma versión para `istioctl` y los complementos.** El material de clase mezcla `istioctl` 1.26.2 con complementos de `release-1.20`. Nosotros fijamos `ISTIO_VERSION` en `infra/versions.env`, e instalamos los complementos desde el tag correspondiente.
+- **Misma versión para `istioctl` y los complementos.** El material de clase mezcla `istioctl` 1.26.2 con complementos de `release-1.20`. Nosotros fijamos `ISTIO_VERSION` en `infra/versions.conf`, e instalamos los complementos desde el tag correspondiente.
 - **Acceso por `port-forward`.** El ingress gateway se crea como `ClusterIP` y las consolas se abren con `scripts/port-forward.sh`. Así no hay balanceadores públicos ni costos adicionales. Si hace falta, `observability/kiali/kiali-lb.yaml` publica Kiali con un balanceador de AWS.
 - **Fusión de métricas de Istio.** El pod declara `prometheus.io/*` apuntando a `/actuator/prometheus`. El sidecar une esas métricas con las de Envoy en el puerto 15020, de modo que Prometheus obtiene en un solo scrape las métricas de negocio, las de la JVM y las de la malla, sin exponer Actuator fuera del pod.
 - **Logs estructurados.** El perfil `docker` emite logs en formato ECS (`logging.structured.format.console=ecs`). Fluent Bit los envía a `/aws/containerinsights/cluster-istio/application`, y un filtro de métricas cuenta los eventos `ERROR`.
