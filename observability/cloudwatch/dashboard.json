@@ -1,0 +1,103 @@
+{
+  "widgets": [
+    {
+      "type": "metric",
+      "x": 0,
+      "y": 0,
+      "width": 8,
+      "height": 6,
+      "properties": {
+        "title": "CPU de nodos (%)",
+        "region": "${AWS_REGION}",
+        "view": "timeSeries",
+        "stat": "Maximum",
+        "period": 60,
+        "metrics": [
+          ["ContainerInsights", "node_cpu_utilization", "ClusterName", "${CLUSTER_NAME}"]
+        ],
+        "annotations": {
+          "horizontal": [{ "label": "Umbral alarma", "value": 80 }]
+        },
+        "yAxis": { "left": { "min": 0, "max": 100 } }
+      }
+    },
+    {
+      "type": "metric",
+      "x": 8,
+      "y": 0,
+      "width": 8,
+      "height": 6,
+      "properties": {
+        "title": "CPU y memoria de order-manager (%)",
+        "region": "${AWS_REGION}",
+        "view": "timeSeries",
+        "stat": "Average",
+        "period": 60,
+        "metrics": [
+          ["ContainerInsights", "pod_cpu_utilization", "PodName", "order-manager", "Namespace", "${APP_NAMESPACE}", "ClusterName", "${CLUSTER_NAME}"],
+          ["ContainerInsights", "pod_memory_utilization", "PodName", "order-manager", "Namespace", "${APP_NAMESPACE}", "ClusterName", "${CLUSTER_NAME}"]
+        ]
+      }
+    },
+    {
+      "type": "metric",
+      "x": 16,
+      "y": 0,
+      "width": 8,
+      "height": 6,
+      "properties": {
+        "title": "Disponibilidad: pods en ejecucion y reinicios",
+        "region": "${AWS_REGION}",
+        "view": "timeSeries",
+        "period": 60,
+        "metrics": [
+          ["ContainerInsights", "service_number_of_running_pods", "Service", "order-manager", "Namespace", "${APP_NAMESPACE}", "ClusterName", "${CLUSTER_NAME}", { "stat": "Minimum" }],
+          ["ContainerInsights", "pod_number_of_container_restarts", "PodName", "order-manager", "Namespace", "${APP_NAMESPACE}", "ClusterName", "${CLUSTER_NAME}", { "stat": "Sum" }]
+        ]
+      }
+    },
+    {
+      "type": "metric",
+      "x": 0,
+      "y": 6,
+      "width": 8,
+      "height": 6,
+      "properties": {
+        "title": "Errores registrados en logs (ERROR)",
+        "region": "${AWS_REGION}",
+        "view": "bar",
+        "stat": "Sum",
+        "period": 300,
+        "metrics": [
+          ["OrderManager", "ErrorLogCount"]
+        ]
+      }
+    },
+    {
+      "type": "log",
+      "x": 8,
+      "y": 6,
+      "width": 16,
+      "height": 6,
+      "properties": {
+        "title": "Ultimos errores de order-manager",
+        "region": "${AWS_REGION}",
+        "view": "table",
+        "query": "SOURCE '/aws/containerinsights/${CLUSTER_NAME}/application' | fields @timestamp, kubernetes.pod_name, log | filter kubernetes.namespace_name = '${APP_NAMESPACE}' and kubernetes.container_name = 'order-manager' and log like /ERROR/ | sort @timestamp desc | limit 50"
+      }
+    },
+    {
+      "type": "log",
+      "x": 0,
+      "y": 12,
+      "width": 24,
+      "height": 6,
+      "properties": {
+        "title": "Access logs de Envoy con respuesta 5xx",
+        "region": "${AWS_REGION}",
+        "view": "table",
+        "query": "SOURCE '/aws/containerinsights/${CLUSTER_NAME}/application' | fields @timestamp, kubernetes.pod_name, log | filter kubernetes.namespace_name = '${APP_NAMESPACE}' and kubernetes.container_name = 'istio-proxy' and log like /\\\" 5\\d\\d / | sort @timestamp desc | limit 50"
+      }
+    }
+  ]
+}

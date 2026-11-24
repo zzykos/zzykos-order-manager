@@ -1,0 +1,41 @@
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: order-manager
+spec:
+  host: order-manager
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+    loadBalancer:
+      simple: LEAST_REQUEST
+    connectionPool:
+      tcp:
+        maxConnections: 100
+        connectTimeout: 3s
+      http:
+        http1MaxPendingRequests: 100
+        http2MaxRequests: 200
+        idleTimeout: 60s
+    outlierDetection:
+      consecutive5xxErrors: 5
+      interval: 10s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: postgres
+spec:
+  host: postgres
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+    connectionPool:
+      tcp:
+        maxConnections: 50
+        connectTimeout: 3s
+        tcpKeepalive:
+          time: 300s
+          interval: 30s

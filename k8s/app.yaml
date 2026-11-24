@@ -13,6 +13,7 @@ spec:
     - name: http
       port: 80
       targetPort: http
+      appProtocol: http
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -37,7 +38,13 @@ spec:
       labels:
         app.kubernetes.io/name: order-manager
         app.kubernetes.io/component: api
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8098"
+        prometheus.io/path: /actuator/prometheus
+        proxy.istio.io/config: '{"holdApplicationUntilProxyStarts": true}'
     spec:
+      serviceAccountName: order-manager
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 30
       securityContext:

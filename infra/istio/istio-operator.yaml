@@ -1,0 +1,52 @@
+apiVersion: install.istio.io/v1alpha1
+kind: IstioOperator
+metadata:
+  name: order-manager-mesh
+  namespace: istio-system
+spec:
+  profile: demo
+  meshConfig:
+    enableTracing: true
+    outboundTrafficPolicy:
+      mode: REGISTRY_ONLY
+    defaultConfig:
+      holdApplicationUntilProxyStarts: true
+    extensionProviders:
+      - name: jaeger
+        zipkin:
+          service: zipkin.istio-system.svc.cluster.local
+          port: 9411
+  components:
+    cni:
+      enabled: true
+    egressGateways:
+      - name: istio-egressgateway
+        enabled: false
+    ingressGateways:
+      - name: istio-ingressgateway
+        enabled: true
+        k8s:
+          service:
+            type: ${INGRESS_SERVICE_TYPE}
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+  values:
+    pilot:
+      resources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+    global:
+      proxy:
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi

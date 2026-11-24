@@ -1,0 +1,68 @@
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-nothing
+spec: {}
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: order-manager-from-ingress
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: order-manager
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/istio-system/sa/istio-ingressgateway-service-account
+      to:
+        - operation:
+            methods: ["GET", "POST", "PUT", "DELETE"]
+            paths:
+              - /api/orders
+              - /api/orders/*
+        - operation:
+            methods: ["GET"]
+            paths:
+              - /actuator/health
+              - /actuator/health/*
+              - /actuator/info
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: order-manager-deny-sensitive-actuator
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: order-manager
+  action: DENY
+  rules:
+    - to:
+        - operation:
+            paths: ["/actuator/*"]
+            notPaths:
+              - /actuator/health
+              - /actuator/health/*
+              - /actuator/info
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: postgres-from-order-manager
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/order-manager/sa/order-manager
+      to:
+        - operation:
+            ports: ["5432"]

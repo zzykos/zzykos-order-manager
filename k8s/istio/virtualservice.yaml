@@ -1,0 +1,47 @@
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: order-manager
+spec:
+  hosts:
+    - "*"
+  gateways:
+    - order-manager-gateway
+  http:
+    - name: actuator-public
+      match:
+        - uri:
+            regex: ^/actuator/(health|info)(/.*)?$
+      route:
+        - destination:
+            host: order-manager
+            port:
+              number: 80
+      timeout: 5s
+    - name: actuator-blocked
+      match:
+        - uri:
+            prefix: /actuator
+      directResponse:
+        status: 404
+        body:
+          string: '{"status":404,"error":"Not Found"}'
+    - name: api
+      match:
+        - uri:
+            prefix: /api/orders
+      route:
+        - destination:
+            host: order-manager
+            port:
+              number: 80
+      timeout: 15s
+      retries:
+        attempts: 3
+        perTryTimeout: 5s
+        retryOn: connect-failure,refused-stream,reset
+    - name: not-found
+      directResponse:
+        status: 404
+        body:
+          string: '{"status":404,"error":"Not Found"}'

@@ -10,9 +10,10 @@ spec:
   selector:
     app.kubernetes.io/name: postgres
   ports:
-    - name: postgres
+    - name: tcp-postgres
       port: 5432
       targetPort: postgres
+      appProtocol: tcp
 ---
 apiVersion: apps/v1
 kind: StatefulSet
@@ -33,6 +34,7 @@ spec:
         app.kubernetes.io/name: postgres
         app.kubernetes.io/component: database
     spec:
+      serviceAccountName: postgres
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true

@@ -199,11 +199,12 @@ jobs:
           skip-setup-trivy: true
 
   k8s:
-    name: "Kubernetes · Validación de manifiestos"
+    name: "Kubernetes · Validación de manifiestos y políticas"
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
       KUBECONFORM_VERSION: v0.6.7
+      CRD_SCHEMAS: https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -216,14 +217,68 @@ jobs:
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
           "$RUNNER_TEMP/kubeconform" -v
 
-      - name: Renderizar (kustomize) y validar contra el esquema de Kubernetes
+      - name: Instalar kustomize, conftest e istioctl (versiones fijadas y verificadas)
+        env:
+          TOOLS_BIN: ${{ runner.temp }}/bin
+        run: ./scripts/install-tools.sh kustomize conftest istioctl
+
+      - name: Renderizar manifiestos con la imagen inmutable del commit
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ github.repository }}:${{ github.sha }}
+          GIT_COMMIT: ${{ github.sha }}
         run: |
-          kubectl kustomize k8s > rendered.yaml
-          kubeconform -strict -summary -kubernetes-version 1.30.0 rendered.yaml
+          export IMAGE="${IMAGE,,}"
+          ./scripts/deploy-eks.sh render rendered.yaml
+
+      - name: Validar contra el esquema de Kubernetes y de los CRD de Istio
+        run: |
+          kubeconform -strict -summary -kubernetes-version 1.35.0 \
+            -schema-location default -schema-location "$CRD_SCHEMAS" rendered.yaml
+
+      - name: Políticas de cumplimiento (OPA / conftest)
+        run: |
+          conftest test rendered.yaml -p policy/k8s --namespace workload --namespace network --output github
+          conftest test --combine rendered.yaml -p policy/k8s --namespace mesh --output github
+
+      - name: Validación semántica de Istio (istioctl analyze)
+        run: istioctl analyze --use-kube=false --failure-threshold Error rendered.yaml
+
+      - name: Resumen de validación
+        if: always()
+        run: |
+          {
+            echo "### Manifiestos de Kubernetes e Istio"
+            echo "| Recurso | Cantidad |"
+            echo "|---|---|"
+            grep -E '^kind:' rendered.yaml | sort | uniq -c | awk '{print "| " $3 " | " $1 " |"}'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  compliance:
+    name: "Cumplimiento · Auditoría del repositorio"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Auditoría automatizada (CI, cadena de suministro y protección de rama)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUIRE_BRANCH_RULES: "true"
+        run: ./scripts/compliance-audit.sh compliance-report.json
+
+      - name: Publicar reporte de cumplimiento
+        if: always() && hashFiles('compliance-report.json') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: compliance-report-${{ github.sha }}
+          path: compliance-report.json
+          retention-days: 90
 
   build:
     name: "4 · Imagen Docker (build, scan, push)"
-    needs: [test, sast, sca, k8s]
+    needs: [test, sast, sca, k8s, compliance]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -235,6 +290,8 @@ jobs:
     outputs:
       image: ${{ steps.vars.outputs.image }}
       digest: ${{ steps.push.outputs.digest }}
+      vuln_critical: ${{ steps.vulns.outputs.critical }}
+      vuln_high: ${{ steps.vulns.outputs.high }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -295,6 +352,18 @@ jobs:
         with:
           sarif_file: trivy-image.sarif
           category: trivy-image
+
+      - name: Contabilizar vulnerabilidades de la imagen (métrica del dashboard)
+        id: vulns
+        if: always() && hashFiles('trivy-image.sarif') != ''
+        run: |
+          counts="$(jq -c '
+            ([.runs[].tool.driver.rules[]? | {key: .id, value: (((.properties.tags // []) | map(select(. == "CRITICAL" or . == "HIGH")))[0] // "OTHER")}] | from_entries) as $sev
+            | [.runs[].results[]? | $sev[.ruleId] // "OTHER"]
+            | {critical: (map(select(. == "CRITICAL")) | length), high: (map(select(. == "HIGH")) | length)}' trivy-image.sarif)"
+          echo "critical=$(jq -r .critical <<<"$counts")" >> "$GITHUB_OUTPUT"
+          echo "high=$(jq -r .high <<<"$counts")" >> "$GITHUB_OUTPUT"
+          echo "Vulnerabilidades en imagen: $counts"
 
       - name: Gate de seguridad de imagen (bloquea si hay HIGH/CRITICAL)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
@@ -361,26 +430,64 @@ jobs:
       coverage: ${{ needs.test.outputs.coverage }}
 
   deploy-production:
-    name: "6 · Deploy producción"
-    needs: [test, build, deploy-staging]
+    name: "6 · Deploy producción (EKS + Istio)"
+    needs: [build, deploy-staging]
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     permissions:
       contents: read
-      packages: read
-    uses: ./.github/workflows/deploy.yml
+    uses: ./.github/workflows/deploy-eks.yml
     with:
-      environment: produccion-simulada
+      environment: produccion-eks
       image: ${{ needs.build.outputs.image }}:${{ github.sha }}
-      replicas: 2
-      tests: ${{ needs.test.outputs.tests }}
-      coverage: ${{ needs.test.outputs.coverage }}
+      expected-replicas: 2
+    secrets:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+
+  pipeline-metrics:
+    name: "7 · Métricas del pipeline (Prometheus)"
+    needs: [test, sast, sca, k8s, compliance, build, deploy-staging, deploy-production]
+    if: always() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+      CLUSTER_NAME: ${{ vars.EKS_CLUSTER || 'cluster-istio' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Acceso al cluster EKS
+        uses: ./.github/actions/eks-access
+        with:
+          tools: istioctl
+
+      - name: Publicar calidad y seguridad del pipeline
+        env:
+          GIT_COMMIT: ${{ github.sha }}
+          PIPELINE_SUCCESS: >-
+            ${{ needs.test.result == 'success' && needs.sast.result == 'success' && needs.sca.result == 'success'
+            && needs.k8s.result == 'success' && needs.compliance.result == 'success' && needs.build.result == 'success'
+            && needs.deploy-staging.result == 'success' && needs.deploy-production.result == 'success' }}
+          COVERAGE: ${{ needs.test.outputs.coverage }}
+          TESTS: ${{ needs.test.outputs.tests }}
+          TEST_FAILURES: ${{ needs.test.outputs.failures }}
+          VULN_CRITICAL: ${{ needs.build.outputs.vuln_critical }}
+          VULN_HIGH: ${{ needs.build.outputs.vuln_high }}
+        run: ./scripts/push-cicd-metrics.sh pipeline
 
   security-alert:
     name: "Alerta de seguridad"
-    needs: [sast, sca, build]
+    needs: [sast, sca, k8s, compliance, build]
     if: >-
       always() && github.event_name != 'pull_request' &&
-      (needs.sast.result == 'failure' || needs.sca.result == 'failure' || needs.build.result == 'failure')
+      (needs.sast.result == 'failure' || needs.sca.result == 'failure' || needs.k8s.result == 'failure' ||
+      needs.compliance.result == 'failure' || needs.build.result == 'failure')
     runs-on: ubuntu-latest
     permissions:
       issues: write
@@ -390,7 +497,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          RESULTS: "SAST=${{ needs.sast.result }} · SCA=${{ needs.sca.result }} · Imagen=${{ needs.build.result }}"
+          RESULTS: "SAST=${{ needs.sast.result }} · SCA=${{ needs.sca.result }} · Políticas K8s=${{ needs.k8s.result }} · Cumplimiento=${{ needs.compliance.result }} · Imagen=${{ needs.build.result }}"
         run: |
           gh label create security-gate --color B60205 --description "Pipeline bloqueado por seguridad" --force
           body="El pipeline fue **bloqueado** por un control de seguridad en \`${GITHUB_SHA:0:7}\`.

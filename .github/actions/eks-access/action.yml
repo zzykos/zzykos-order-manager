@@ -1,0 +1,47 @@
+name: Acceso a EKS
+description: Valida las credenciales temporales de AWS Academy, instala herramientas con version fijada y configura kubectl.
+
+inputs:
+  tools:
+    description: Herramientas a instalar con scripts/install-tools.sh
+    required: false
+    default: istioctl kustomize
+
+runs:
+  using: composite
+  steps:
+    - name: Validar credenciales de AWS (Learner Lab)
+      shell: bash
+      run: |
+        missing=()
+        for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_REGION CLUSTER_NAME; do
+          [ -n "${!name:-}" ] || missing+=("$name")
+        done
+        if [ "${#missing[@]}" -gt 0 ]; then
+          echo "::error title=Acceso a EKS::Faltan variables o secrets: ${missing[*]}"
+          exit 1
+        fi
+        if ! output="$(aws sts get-caller-identity --output json 2>&1)"; then
+          echo "::error title=Credenciales AWS::${output//$'\n'/ } Renovar AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY y AWS_SESSION_TOKEN desde AWS Details del Learner Lab."
+          exit 1
+        fi
+        echo "Credenciales de AWS validas para la region ${AWS_REGION}"
+
+    - name: Instalar herramientas
+      shell: bash
+      env:
+        TOOLS: ${{ inputs.tools }}
+        TOOLS_BIN: ${{ runner.temp }}/bin
+      run: |
+        read -r -a tools <<<"$TOOLS"
+        ./scripts/install-tools.sh "${tools[@]}"
+
+    - name: Configurar kubectl
+      shell: bash
+      run: |
+        if ! aws eks describe-cluster --name "$CLUSTER_NAME" --region "$AWS_REGION" --query 'cluster.status' --output text >/dev/null 2>&1; then
+          echo "::error title=Cluster EKS::No existe el cluster ${CLUSTER_NAME} en ${AWS_REGION}. Crearlo con infra/eks/create-cluster.sh"
+          exit 1
+        fi
+        aws eks update-kubeconfig --region "$AWS_REGION" --name "$CLUSTER_NAME" >/dev/null
+        kubectl get nodes -o wide

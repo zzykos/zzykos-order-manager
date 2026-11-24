@@ -17,6 +17,11 @@ Este repositorio contiene no solo el código fuente de la aplicación (desarroll
 - [Seguridad y Escalabilidad](#seguridad-y-escalabilidad)
 - [Trazabilidad y Despliegue](#trazabilidad-y-despliegue)
 - [Orquestación](#orquestaci%C3%B3n)
+- [Service Mesh en Amazon EKS (Istio y Kiali)](#service-mesh-en-amazon-eks-istio-y-kiali)
+- [Monitoreo, Métricas y Dashboards](#monitoreo-m%C3%A9tricas-y-dashboards)
+- [Políticas de Cumplimiento y Auditoría](#pol%C3%ADticas-de-cumplimiento-y-auditor%C3%ADa)
+- [Detención Automática del Pipeline](#detenci%C3%B3n-autom%C3%A1tica-del-pipeline)
+- [Configuración del Repositorio y del Clúster](#configuraci%C3%B3n-del-repositorio-y-del-cl%C3%BAster)
 - [Evidencias del Proyecto](#evidencias-del-proyecto)
 - [Declaración de uso de IA](#declaraci%C3%B3n-de-uso-de-ia)
 - [Conclusiones y Reflexión Individual](#conclusiones-y-reflexi%C3%B3n-individual)
@@ -135,14 +140,21 @@ curl http://localhost:8098/api/orders/status/CONFIRMED
 ```text
 .
 ├── .github/
+│   ├── actions/eks-access/   # Acción compuesta: credenciales Learner Lab, herramientas y kubectl
 │   ├── dependabot.yml        # Actualizaciones automáticas de dependencias
 │   └── workflows/
-│       ├── ci-cd.yml         # Pipeline principal (pruebas, seguridad, build, deploy)
-│       └── deploy.yml        # Workflow reutilizable de despliegue por entorno
+│       ├── ci-cd.yml         # Pipeline principal (pruebas, seguridad, políticas, build, deploy, métricas)
+│       ├── deploy.yml        # Despliegue reutilizable en entorno simulado (Docker Compose)
+│       ├── deploy-eks.yml    # Despliegue reutilizable en EKS con verificación y rollback
+│       └── failure-demo.yml  # Demostración de bloqueo ante fallas críticas
 ├── docs/fases/               # Bitácora del desarrollo, fase por fase
+├── infra/                    # EKS (eksctl + LabRole), Istio, complementos, limpieza y versiones
 ├── k8s/                      # Manifiestos de Kubernetes (Kustomize)
+│   └── istio/                # Gateway, VirtualService, DestinationRule, mTLS, autorización, Sidecar, Telemetry
 ├── nginx/nginx.conf          # Configuración del API Gateway
-├── scripts/smoke-test.sh     # Pruebas de humo post-despliegue
+├── observability/            # Reglas de Prometheus, Pushgateway, dashboard Grafana, Kiali y CloudWatch
+├── policy/k8s/               # Políticas OPA/Rego evaluadas con conftest
+├── scripts/                  # Despliegue, verificación, SLO, métricas CI/CD, auditoría y utilidades
 ├── src/                      # Código fuente y pruebas
 ├── Dockerfile                # Build multi-etapa
 ├── docker-compose.yml        # Orquestación local y de los entornos simulados
@@ -167,31 +179,36 @@ Para garantizar que la aplicación se ejecute de manera idéntica en cualquier e
 
 ## Pipeline CI/CD
 
-El flujo de integración y despliegue continuo está orquestado con **GitHub Actions** y se divide en dos workflows:
+El flujo de integración y despliegue continuo está orquestado con **GitHub Actions** y se divide en cuatro workflows:
 
 - `ci-cd.yml`: pipeline principal. Se dispara ante cada `push` a la rama `main` (excepto cuando solo cambian archivos de documentación), al abrir un `pull request` hacia `main` o mediante ejecución manual.
-- `deploy.yml`: workflow reutilizable que no se ejecuta por sí solo; `ci-cd.yml` lo invoca una vez por entorno (staging y producción simulada) con la imagen y la cantidad de réplicas correspondientes.
+- `deploy.yml`: workflow reutilizable de staging en un entorno simulado con Docker Compose en el runner.
+- `deploy-eks.yml`: workflow reutilizable de producción en Amazon EKS con Istio. Despliega, verifica la malla, ejecuta las pruebas de humo y el gate de SLO, y hace rollback automático si algo falla.
+- `failure-demo.yml`: ejecución manual que inyecta una falla crítica y demuestra que el pipeline se detiene antes del despliegue.
 
-Las etapas de verificación (pruebas, SAST, SCA y validación de Kubernetes) corren en paralelo, y la construcción de la imagen solo comienza cuando todas terminan con éxito:
+Las etapas de verificación corren en paralelo, y la construcción de la imagen solo comienza cuando todas terminan con éxito:
 
-1. **Pruebas:** Verificación del código mediante tests unitarios y de integración.
-2. **SAST (SonarCloud):** Análisis estático en busca de _code smells_ o vulnerabilidades.
-3. **SCA (Trivy):** Escaneo de dependencias y vulnerabilidades en la imagen Docker.
-4. **Validación K8s:** Renderizado de los manifiestos con Kustomize y validación contra el esquema de Kubernetes con `kubeconform`.
-5. **Construcción:** Empaquetado, escaneo y publicación de la imagen Docker en GitHub Container Registry.
-6. **Deploy Staging:** Despliegue automático en el entorno de staging, simulado con Docker Compose en el runner de GitHub Actions.
-7. **Deploy Producción (Simulada):** Pase al entorno productivo, solo si staging fue exitoso.
-8. **Alertas de Seguridad:** Generación de notificaciones si algún paso crítico falla.
+1. **Pruebas:** tests unitarios y de integración, con cobertura mínima de 80 % (JaCoCo).
+2. **SAST (SonarCloud):** análisis estático con Quality Gate bloqueante.
+3. **SCA (Trivy):** dependencias, secretos y configuración del repositorio.
+4. **Validación K8s y políticas:** renderizado con la imagen del commit, `kubeconform` con los esquemas de los CRD de Istio, políticas OPA con `conftest` e `istioctl analyze`.
+5. **Auditoría de cumplimiento:** controles del repositorio y de la protección de la rama `main`.
+6. **Construcción:** empaquetado, escaneo de la imagen y publicación en GitHub Container Registry.
+7. **Deploy Staging:** entorno simulado con Docker Compose y pruebas de humo.
+8. **Deploy Producción (EKS + Istio):** despliegue en el clúster, verificación post-despliegue y rollback automático.
+9. **Métricas del pipeline:** publicación de cobertura, pruebas, vulnerabilidades, resultado y tiempo de despliegue en Prometheus.
+10. **Alertas de Seguridad:** issue automático si falla un control de seguridad, de políticas o de cumplimiento.
 
 **Diferencias entre push y pull request:**
 
 |Etapa|Push a `main`|Pull request|
 |---|---|---|
-|Pruebas, SAST, SCA y validación K8s|Sí|Sí|
+|Pruebas, SAST, SCA, políticas K8s y auditoría|Sí|Sí|
 |Revisión de dependencias (_dependency review_)|No|Sí|
 |Build y escaneo de imagen|Sí|Sí|
 |Publicación de imagen en el registro|Sí|No|
-|Deploy staging y producción simulada|Sí|No|
+|Deploy staging y producción en EKS|Sí|No|
+|Métricas del pipeline en Prometheus|Sí|No|
 |Issue automático de seguridad|Sí|No|
 
 ## Pruebas y Calidad de Código
@@ -258,7 +275,7 @@ Estos servicios cuentan con _healthchecks_ internos y directivas `depends_on` pa
 
 Adicionalmente, el directorio `/k8s` contiene los manifiestos, organizados con Kustomize, listos para migrar a un clúster de Kubernetes real: Namespace, ConfigMap, StatefulSet de PostgreSQL, Deployment y Service de la aplicación, HPA, PodDisruptionBudget y NetworkPolicies.
 
-**Requisitos del clúster:** Kubernetes 1.30 o superior y [metrics-server](https://github.com/kubernetes-sigs/metrics-server) instalado, necesario para que el HPA pueda escalar según el consumo.
+**Requisitos del clúster:** Kubernetes 1.32 a 1.36 (compatibles con Istio 1.31), [metrics-server](https://github.com/kubernetes-sigs/metrics-server) para el HPA e Istio instalado con `infra/istio/install.sh`. Los manifiestos incluyen el namespace con inyección del sidecar y los recursos de la malla en `k8s/istio`. Para el despliegue completo en EKS ver [Service Mesh en Amazon EKS](#service-mesh-en-amazon-eks-istio-y-kiali).
 
 ```bash
 # 1. Crear el namespace y el secreto con la contraseña de la base de datos
@@ -275,6 +292,80 @@ kubectl -n order-manager get pods,svc,hpa
 # 4. Acceder a la API desde la máquina local
 kubectl -n order-manager port-forward svc/order-manager 8098:80
 ```
+
+## Service Mesh en Amazon EKS (Istio y Kiali)
+
+El entorno productivo corre en Amazon EKS (`cluster-istio`, `us-east-1`) dentro de una malla Istio 1.31.4. El clúster se crea con `eksctl` usando el rol `LabRole` de AWS Academy Learner Lab para el plano de control y para los nodos (3 x `t3.medium`), sin roles IAM nuevos ni proveedor OIDC. El detalle de la arquitectura y de las decisiones de diseño está en [`docs/fases/fase-11-observabilidad.md`](docs/fases/fase-11-observabilidad.md).
+
+|Recurso|Función|
+|---|---|
+|`Gateway` + `VirtualService`|Entrada por el ingress gateway; expone solo `/api/orders`, `/actuator/health` y `/actuator/info`, con timeouts y reintentos ante fallas de conexión|
+|`DestinationRule`|mTLS hacia los destinos, balanceo `LEAST_REQUEST`, límites de conexiones y *outlier detection* (circuit breaker)|
+|`PeerAuthentication`|mTLS `STRICT` en todo el namespace|
+|`AuthorizationPolicy`|Denegación por defecto; solo el ingress gateway llama a la API y solo `order-manager` llega a PostgreSQL|
+|`Sidecar`|Salida restringida al registro de la malla (`REGISTRY_ONLY`)|
+|`Telemetry`|Access logs de Envoy y trazas hacia Jaeger|
+
+```bash
+./scripts/install-tools.sh istioctl kustomize conftest eksctl
+./infra/eks/create-cluster.sh
+./infra/istio/install.sh
+./infra/addons/install.sh
+ALERT_EMAIL=equipo@example.com ./observability/cloudwatch/setup.sh
+./scripts/port-forward.sh
+```
+
+Las consolas se abren por defecto con `port-forward`: Kiali en `http://127.0.0.1:20001`, Grafana en `:3000`, Prometheus en `:9090`, Jaeger en `:16686` y la API en `:8080`. Como alternativa opcional, `EXPOSE_KIALI_LB=true ./infra/addons/install.sh` aplica `observability/kiali/kiali-lb.yaml` y publica Kiali con un balanceador de AWS en el puerto 20001. Debe eliminarse al terminar, porque deja la consola accesible desde internet. `./infra/cleanup.sh` libera todos los recursos en el orden correcto.
+
+## Monitoreo, Métricas y Dashboards
+
+|Herramienta|Qué observamos|
+|---|---|
+|Prometheus|Métricas de Envoy (RPS, códigos, latencia), de la JVM y HTTP (Micrometer en `/actuator/prometheus`), de CPU y memoria (cAdvisor) y del pipeline (Pushgateway)|
+|Grafana|Dashboard **Order Manager - DevOps**, versionado en `observability/grafana/dashboards` y sincronizado en cada despliegue|
+|Kiali|Grafo de tráfico en vivo, estado de mTLS y validación de los recursos de Istio|
+|Jaeger|Trazas distribuidas gateway → `order-manager` → `postgres`|
+|CloudWatch|Container Insights, logs centralizados (aplicación en JSON ECS y access logs de Envoy), filtro de métricas de errores, dashboard y alarmas con notificación SNS por correo|
+
+El dashboard une las dos caras del sistema:
+
+- **CI/CD:** resultado del pipeline, cobertura de pruebas, tiempo de despliegue y su tendencia, pruebas ejecutadas y fallidas, vulnerabilidades de la imagen, y trazabilidad commit → imagen → ejecución.
+- **Ejecución:** disponibilidad frente al SLO de 99 %, RPS, latencia p50/p95/p99, errores 5xx, errores registrados en logs, uso de CPU y memoria por contenedor, heap de la JVM y proporción de tráfico mTLS.
+
+Las reglas de grabación y las alertas están en `observability/prometheus/rules-patch.yaml`; las alarmas de CloudWatch, en `observability/cloudwatch/setup.sh`. La tabla de qué decisión técnica se toma ante cada señal está en la [fase 11](docs/fases/fase-11-observabilidad.md#cómo-estas-señales-guían-nuestras-decisiones-técnicas).
+
+## Políticas de Cumplimiento y Auditoría
+
+- **Calidad:** JaCoCo (mínimo 80 %) y Quality Gate de SonarQube bloqueante.
+- **Seguridad de la cadena de suministro:** Trivy (código, dependencias, secretos e imagen), Dependency Review en los PR, acciones fijadas por SHA y Dependabot.
+- **Políticas como código:** `policy/k8s/*.rego`, evaluadas con `conftest` sobre los manifiestos renderizados: hardening de contenedores, identidades dedicadas, imágenes inmutables, sondas, mTLS STRICT, denegación por defecto, egress restringido, HPA y PDB.
+- **Auditoría automatizada:** `scripts/compliance-audit.sh` genera `compliance-report.json` en cada ejecución (artefacto con retención de 90 días).
+- **Protección de rama:** `scripts/branch-protection.sh` define el ruleset de `main`: PR con aprobación, checks obligatorios, historial lineal y sin force push. La auditoría verifica que siga activo.
+
+El detalle de cada control está en [`docs/fases/fase-12-cumplimiento.md`](docs/fases/fase-12-cumplimiento.md).
+
+## Detención Automática del Pipeline
+
+Cada control bloqueante termina con código distinto de cero. GitHub Actions no ejecuta los jobs que dependen de él, así que la imagen no se publica y no se despliega. Después del despliegue en EKS, `scripts/post-deploy-verify.sh` valida la malla, ejecuta las pruebas de humo y evalúa los SLO de la revisión nueva con métricas de Istio (errores 5xx <= 1 %, p95 <= 1 s). Si no se cumplen, `scripts/rollback-eks.sh` restaura la revisión anterior y la ejecución queda marcada como fallida.
+
+Para demostrarlo, ejecutamos **Actions → Demostración de bloqueo del pipeline** con uno de los escenarios `cobertura-insuficiente`, `dependencia-vulnerable`, `manifiesto-inseguro` o `mtls-desactivado`. El resumen de la ejecución muestra el control fallido y el despliegue en estado `skipped`.
+
+## Configuración del Repositorio y del Clúster
+
+|Tipo|Nombre|Valor|
+|---|---|---|
+|Secret|`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`|Credenciales de *AWS Details* del Learner Lab. Expiran con cada sesión y deben renovarse antes de ejecutar el pipeline|
+|Secret|`SONAR_TOKEN`|Token de SonarQube Cloud|
+|Variable|`AWS_REGION`|`us-east-1` (opcional)|
+|Variable|`EKS_CLUSTER`|`cluster-istio` (opcional)|
+|Environment|`produccion-eks`|Puede exigir aprobación manual antes del despliegue|
+|Paquete GHCR|`zzykos-order-manager`|Visibilidad pública, para que los nodos de EKS descarguen la imagen sin credenciales|
+
+Pasos iniciales:
+
+1. Cargar los secrets y crear el clúster con la secuencia de la sección [Service Mesh](#service-mesh-en-amazon-eks-istio-y-kiali).
+2. Ejecutar `GH_TOKEN=<token-admin> ./scripts/branch-protection.sh zzykos/zzykos-order-manager` para activar la protección de `main` que exige la auditoría.
+3. Integrar en `main` mediante pull request. El pipeline despliega en EKS y publica las métricas del pipeline en Grafana.
 
 ## Evidencias del Proyecto
 
