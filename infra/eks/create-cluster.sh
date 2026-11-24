@@ -59,4 +59,9 @@ fi
 aws eks update-kubeconfig --region "$AWS_REGION" --name "$CLUSTER_NAME" >/dev/null \
   || die "no se pudo actualizar kubeconfig"
 kubectl wait --for=condition=Ready nodes --all --timeout=300s || die "los nodos no quedaron Ready"
+aws eks wait addon-active --cluster-name "$CLUSTER_NAME" --region "$AWS_REGION" --addon-name aws-ebs-csi-driver \
+  || die "el complemento aws-ebs-csi-driver no quedo activo"
+kubectl apply -f "$REPO_ROOT/infra/eks/storageclass.yaml" || die "no se pudo crear la StorageClass gp3"
+kubectl annotate storageclass gp2 storageclass.kubernetes.io/is-default-class=false --overwrite >/dev/null 2>&1 \
+  || log_warn "no existe la StorageClass gp2; se omite"
 kubectl get nodes -o wide

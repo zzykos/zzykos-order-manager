@@ -45,6 +45,9 @@ CloudWatch: alarmas ──► SNS ──► correo del equipo
 - **Logs estructurados.** El perfil `docker` emite logs en formato ECS (`logging.structured.format.console=ecs`). Fluent Bit los envía a `/aws/containerinsights/cluster-istio/application`, y un filtro de métricas cuenta los eventos `ERROR`.
 - **Learner Lab.** El clúster y los nodos usan el rol existente `LabRole` (`iam.serviceRoleARN` e `instanceRoleARN`), sin OIDC ni roles nuevos. Las credenciales son temporales: tanto los scripts como el pipeline validan la identidad antes de operar y muestran un error explícito si expiraron.
 
+- **Almacenamiento persistente.** Desde Kubernetes 1.30, EKS no trae una StorageClass por defecto funcional. Instalamos el complemento `aws-ebs-csi-driver` y la StorageClass `gp3` cifrada (`infra/eks/storageclass.yaml`), que es donde PostgreSQL guarda sus datos.
+- **Instrumentación automática de CloudWatch desactivada.** El complemento `amazon-cloudwatch-observability` activa por defecto *Application Signals*, que inyecta agentes de OpenTelemetry para Java, Node.js, Python y .NET en todos los pods. Esos contenedores no cumplen el Pod Security Standard `restricted` y además copian agentes que superan el límite de almacenamiento efímero de 256 MiB, lo que provoca desalojos. Como la telemetría de trazas ya la entrega Istio con Jaeger, lo desactivamos en el complemento (`monitorAllServices: false`) y además en cada workload con las anotaciones `instrumentation.opentelemetry.io/inject-*: "false"`.
+
 ## Puesta en marcha
 
 ```bash
