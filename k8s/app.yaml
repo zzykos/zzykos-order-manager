@@ -43,6 +43,10 @@ spec:
         prometheus.io/port: "8098"
         prometheus.io/path: /actuator/prometheus
         proxy.istio.io/config: '{"holdApplicationUntilProxyStarts": true}'
+        instrumentation.opentelemetry.io/inject-java: "false"
+        instrumentation.opentelemetry.io/inject-nodejs: "false"
+        instrumentation.opentelemetry.io/inject-python: "false"
+        instrumentation.opentelemetry.io/inject-dotnet: "false"
     spec:
       serviceAccountName: order-manager
       automountServiceAccountToken: false

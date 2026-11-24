@@ -30,7 +30,9 @@ addons:
   - name: coredns
   - name: kube-proxy
   - name: metrics-server
+  - name: aws-ebs-csi-driver
   - name: amazon-cloudwatch-observability
+    configurationValues: '{"manager":{"applicationSignals":{"autoMonitor":{"monitorAllServices":false}}}}'
 
 managedNodeGroups:
   - name: nodos-istio

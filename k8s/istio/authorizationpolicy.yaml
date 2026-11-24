@@ -43,6 +43,7 @@ spec:
   rules:
     - to:
         - operation:
+            ports: ["8098"]
             paths: ["/actuator/*"]
             notPaths:
               - /actuator/health
