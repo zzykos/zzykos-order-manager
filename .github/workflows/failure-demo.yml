@@ -17,7 +17,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: failure-demo-${{ github.ref }}
+  group: failure-demo-${{ github.ref }}-${{ inputs.escenario }}
   cancel-in-progress: true
 
 env:
