@@ -639,7 +639,9 @@
                 "value": 0.8
               }
             ]
-          }
+          },
+          "min": 0,
+          "max": 1
         },
         "overrides": []
       },
@@ -782,7 +784,9 @@
           "color": {
             "mode": "thresholds"
           },
-          "decimals": 2
+          "decimals": 2,
+          "min": 0,
+          "max": 1
         },
         "overrides": []
       },
@@ -1092,7 +1096,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(istio_requests_total{reporter=\"destination\",destination_workload_namespace=\"order-manager\",destination_workload=\"order-manager\",connection_security_policy=\"mutual_tls\"}[5m])) / clamp_min(order_manager:requests:rate5m, 1e-9)",
+          "expr": "sum(rate(istio_requests_total{reporter=\"destination\",destination_workload_namespace=\"order-manager\",destination_workload=\"order-manager\",connection_security_policy=\"mutual_tls\"}[5m])) / clamp_min(sum(rate(istio_requests_total{reporter=\"destination\",destination_workload_namespace=\"order-manager\",destination_workload=\"order-manager\"}[5m])), 1e-9)",
           "legendFormat": "",
           "refId": "A",
           "range": false,
@@ -1118,7 +1122,9 @@
           "color": {
             "mode": "thresholds"
           },
-          "decimals": 1
+          "decimals": 1,
+          "min": 0,
+          "max": 1
         },
         "overrides": []
       },
@@ -1306,7 +1312,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "order_manager:errors_5xx:rate5m / clamp_min(order_manager:requests:rate5m, 1e-9)",
+          "expr": "sum(rate(istio_requests_total{reporter=\"destination\",destination_workload_namespace=\"order-manager\",destination_workload=\"order-manager\",response_code=~\"5..\"}[5m])) / clamp_min(sum(rate(istio_requests_total{reporter=\"destination\",destination_workload_namespace=\"order-manager\",destination_workload=\"order-manager\"}[5m])), 1e-9) or vector(0)",
           "legendFormat": "5xx",
           "refId": "A",
           "range": true,
@@ -1345,7 +1351,9 @@
                 "value": 0.01
               }
             ]
-          }
+          },
+          "min": 0,
+          "softMax": 0.05
         },
         "overrides": []
       },
