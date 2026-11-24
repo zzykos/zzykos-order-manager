@@ -20,3 +20,5 @@ Thumbs.db
 docker-compose.override.yml
 
 .github/modernize/
+compliance-report.json
+rendered.yaml

@@ -1,0 +1,150 @@
+name: Demostración de bloqueo del pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      escenario:
+        description: Falla crítica que se inyecta en una copia efímera del código
+        required: true
+        type: choice
+        options:
+          - cobertura-insuficiente
+          - dependencia-vulnerable
+          - manifiesto-inseguro
+          - mtls-desactivado
+
+permissions:
+  contents: read
+
+concurrency:
+  group: failure-demo-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  JAVA_VERSION: "25"
+  JAVA_DISTRIBUTION: temurin
+
+jobs:
+  gate:
+    name: "Control de calidad y seguridad · ${{ inputs.escenario }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6
+        if: inputs.escenario == 'cobertura-insuficiente' || inputs.escenario == 'dependencia-vulnerable'
+        with:
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+
+      - name: "Inyección: umbral de cobertura exigido de 99%"
+        if: inputs.escenario == 'cobertura-insuficiente'
+        run: echo "MAVEN_ARGS=-Djacoco.minimum.line.coverage=0.99" >> "$GITHUB_ENV"
+
+      - name: "Gate JaCoCo: mvn verify"
+        if: inputs.escenario == 'cobertura-insuficiente'
+        run: mvn -B -ntp verify $MAVEN_ARGS
+
+      - name: "Inyección: log4j-core 2.14.1 (CVE-2021-44228, CRITICAL)"
+        if: inputs.escenario == 'dependencia-vulnerable'
+        run: |
+          python3 - <<'PY'
+          import pathlib
+          pom = pathlib.Path("pom.xml")
+          text = pom.read_text()
+          marker = "    <dependencies>\n"
+          if text.count(marker) != 1:
+              raise SystemExit("no se encontro el bloque <dependencies> en pom.xml")
+          dependency = (
+              "        <dependency>\n"
+              "            <groupId>org.apache.logging.log4j</groupId>\n"
+              "            <artifactId>log4j-core</artifactId>\n"
+              "            <version>2.14.1</version>\n"
+              "        </dependency>\n"
+          )
+          pom.write_text(text.replace(marker, marker + dependency))
+          PY
+          grep -n -A3 'log4j-core' pom.xml
+          mvn -B -ntp -q dependency:resolve
+
+      - name: "Gate SCA: Trivy (bloquea HIGH/CRITICAL)"
+        if: inputs.escenario == 'dependencia-vulnerable'
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln
+          severity: CRITICAL
+          ignore-unfixed: true
+          format: table
+          exit-code: "1"
+
+      - name: Instalar kustomize, conftest e istioctl
+        if: inputs.escenario == 'manifiesto-inseguro' || inputs.escenario == 'mtls-desactivado'
+        env:
+          TOOLS_BIN: ${{ runner.temp }}/bin
+        run: ./scripts/install-tools.sh kustomize conftest istioctl
+
+      - name: "Inyección: contenedor privilegiado con escalamiento de privilegios"
+        if: inputs.escenario == 'manifiesto-inseguro'
+        run: |
+          cd k8s
+          kustomize edit add patch --kind Deployment --name order-manager --patch \
+            '[{"op":"replace","path":"/spec/template/spec/containers/0/securityContext","value":{"privileged":true,"allowPrivilegeEscalation":true}}]'
+
+      - name: "Inyección: PeerAuthentication en modo PERMISSIVE"
+        if: inputs.escenario == 'mtls-desactivado'
+        run: |
+          sed -i 's/mode: STRICT/mode: PERMISSIVE/' k8s/istio/peerauthentication.yaml
+          cat k8s/istio/peerauthentication.yaml
+
+      - name: "Gate de políticas: conftest sobre los manifiestos renderizados"
+        if: inputs.escenario == 'manifiesto-inseguro' || inputs.escenario == 'mtls-desactivado'
+        env:
+          IMAGE: ghcr.io/demo/order-manager:${{ github.sha }}
+          GIT_COMMIT: ${{ github.sha }}
+        run: |
+          ./scripts/deploy-eks.sh render rendered.yaml
+          conftest test rendered.yaml -p policy/k8s --namespace workload --namespace network --output github
+          conftest test --combine rendered.yaml -p policy/k8s --namespace mesh --output github
+
+  deploy:
+    name: "Despliegue a producción (no debe ejecutarse)"
+    needs: gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Despliegue
+        run: echo "Esta etapa solo se alcanza si el control no detuvo el pipeline."
+
+  evidencia:
+    name: "Evidencia del bloqueo"
+    needs: [gate, deploy]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verificar que el pipeline se detuvo antes del despliegue
+        env:
+          ESCENARIO: ${{ inputs.escenario }}
+          GATE: ${{ needs.gate.result }}
+          DEPLOY: ${{ needs.deploy.result }}
+        run: |
+          {
+            echo "## Demostración de bloqueo: \`${ESCENARIO}\`"
+            echo
+            echo "| Etapa | Resultado |"
+            echo "|---|---|"
+            echo "| Control de calidad y seguridad | ${GATE} |"
+            echo "| Despliegue a producción | ${DEPLOY} |"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$GATE" = failure ] && [ "$DEPLOY" = skipped ]; then
+            echo "**Resultado:** el control detectó la falla crítica y el despliegue no se ejecutó." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "**Resultado:** el control NO detuvo el pipeline." >> "$GITHUB_STEP_SUMMARY"
+            echo "::error title=Control inefectivo::El escenario ${ESCENARIO} no bloqueó el despliegue (gate=${GATE}, deploy=${DEPLOY})."
+            exit 1
+          fi

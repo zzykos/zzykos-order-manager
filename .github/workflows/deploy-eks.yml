@@ -1,0 +1,168 @@
+name: Deploy EKS (reutilizable)
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        required: true
+        type: string
+      image:
+        required: true
+        type: string
+      expected-replicas:
+        required: false
+        type: number
+        default: 2
+    outputs:
+      success:
+        value: ${{ jobs.deploy.outputs.success }}
+      rolled-back:
+        value: ${{ jobs.deploy.outputs.rolled_back }}
+      duration:
+        value: ${{ jobs.deploy.outputs.duration }}
+    secrets:
+      AWS_ACCESS_KEY_ID:
+        required: true
+      AWS_SECRET_ACCESS_KEY:
+        required: true
+      AWS_SESSION_TOKEN:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: "Deploy EKS · ${{ inputs.environment }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: ${{ inputs.environment }}
+      url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    concurrency:
+      group: deploy-${{ inputs.environment }}
+      cancel-in-progress: false
+    outputs:
+      success: ${{ steps.result.outputs.success }}
+      rolled_back: ${{ steps.result.outputs.rolled_back }}
+      duration: ${{ steps.result.outputs.duration }}
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+      CLUSTER_NAME: ${{ vars.EKS_CLUSTER || 'cluster-istio' }}
+      IMAGE: ${{ inputs.image }}
+      GIT_COMMIT: ${{ github.sha }}
+      APP_VERSION: 1.0.0-run.${{ github.run_number }}
+      DEPLOY_ENV: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Acceso al cluster EKS
+        uses: ./.github/actions/eks-access
+
+      - name: Desplegar en EKS (Kustomize + Istio)
+        id: deploy
+        run: |
+          echo "start=$(date +%s)" >> "$GITHUB_OUTPUT"
+          ./scripts/deploy-eks.sh apply "$RUNNER_TEMP/rendered.yaml"
+
+      - name: Verificación post-despliegue (malla, smoke tests y SLO)
+        id: verify
+        env:
+          EXPECTED_COMMIT: ${{ github.sha }}
+          EXPECTED_REPLICAS: ${{ inputs.expected-replicas }}
+        run: ./scripts/post-deploy-verify.sh
+
+      - name: Rollback automático
+        id: rollback
+        if: failure() && steps.deploy.outputs.start != ''
+        run: |
+          if ./scripts/rollback-eks.sh; then
+            echo "rolled_back=true" >> "$GITHUB_OUTPUT"
+            echo "::error title=Despliegue revertido::La revisión ${GITHUB_SHA:0:12} no superó la verificación y se restauró la versión anterior."
+          else
+            echo "rolled_back=false" >> "$GITHUB_OUTPUT"
+            echo "::error title=Rollback fallido::Intervención manual requerida en ${CLUSTER_NAME}/${DEPLOY_ENV}."
+            exit 1
+          fi
+
+      - name: Resultado del despliegue
+        id: result
+        if: always() && steps.deploy.outputs.start != ''
+        env:
+          START: ${{ steps.deploy.outputs.start }}
+          DEPLOY_OUTCOME: ${{ steps.deploy.outcome }}
+          VERIFY_OUTCOME: ${{ steps.verify.outcome }}
+          ROLLED_BACK: ${{ steps.rollback.outputs.rolled_back || 'false' }}
+        run: |
+          success=false
+          if [ "$DEPLOY_OUTCOME" = success ] && [ "$VERIFY_OUTCOME" = success ]; then
+            success=true
+          fi
+          {
+            echo "success=$success"
+            echo "rolled_back=$ROLLED_BACK"
+            echo "duration=$(( $(date +%s) - START ))"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Publicar métricas de despliegue (Pushgateway)
+        if: always() && steps.result.outcome == 'success'
+        continue-on-error: true
+        env:
+          DEPLOY_SUCCESS: ${{ steps.result.outputs.success }}
+          DEPLOY_DURATION: ${{ steps.result.outputs.duration }}
+          ROLLED_BACK: ${{ steps.result.outputs.rolled_back }}
+        run: ./scripts/push-cicd-metrics.sh deploy
+
+      - name: Sincronizar dashboard de Grafana
+        if: success()
+        continue-on-error: true
+        run: ./scripts/import-grafana-dashboard.sh
+
+      - name: Publicar manifiestos desplegados
+        if: always() && hashFiles(format('{0}/rendered.yaml', runner.temp)) != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: manifests-${{ inputs.environment }}-${{ github.sha }}
+          path: ${{ runner.temp }}/rendered.yaml
+          retention-days: 30
+
+      - name: Resumen de despliegue
+        if: always()
+        env:
+          SUCCESS: ${{ steps.result.outputs.success }}
+          ROLLED_BACK: ${{ steps.result.outputs.rolled_back }}
+          DURATION: ${{ steps.result.outputs.duration }}
+          SLO_REQUESTS: ${{ steps.verify.outputs.requests }}
+          SLO_ERRORS: ${{ steps.verify.outputs.error_ratio }}
+          SLO_P95: ${{ steps.verify.outputs.p95_ms }}
+        run: |
+          {
+            echo "## Despliegue en \`${DEPLOY_ENV}\` (EKS ${CLUSTER_NAME}) — $([ "${SUCCESS:-false}" = true ] && echo 'exitoso' || echo 'fallido')"
+            echo
+            echo "| Trazabilidad | Valor |"
+            echo "|---|---|"
+            echo "| Commit | [\`${GITHUB_SHA:0:7}\`](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}) |"
+            echo "| Revisión (label app.kubernetes.io/version) | \`${GITHUB_SHA:0:12}\` |"
+            echo "| Imagen | \`${IMAGE}\` |"
+            echo "| Tiempo de despliegue y verificación | ${DURATION:-n/d} s |"
+            echo "| Solicitudes evaluadas por el gate de SLO | ${SLO_REQUESTS:-n/d} |"
+            echo "| Proporción de errores 5xx | ${SLO_ERRORS:-n/d} |"
+            echo "| Latencia p95 | ${SLO_P95:-n/d} ms |"
+            echo "| Rollback automático | ${ROLLED_BACK:-false} |"
+            echo
+            echo "Consolas: \`./scripts/port-forward.sh\` (Kiali :20001, Grafana :3000, Prometheus :9090, Jaeger :16686)."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Diagnóstico ante fallo
+        if: failure()
+        run: |
+          ns=order-manager
+          kubectl -n "$ns" get pods,svc,hpa -o wide || echo "::warning::sin acceso a recursos del namespace"
+          kubectl -n "$ns" get events --sort-by=.lastTimestamp | tail -n 40 || echo "::warning::sin eventos"
+          kubectl -n "$ns" logs deployment/order-manager -c order-manager --tail=100 || echo "::warning::sin logs de la aplicación"
+          kubectl -n "$ns" logs deployment/order-manager -c istio-proxy --tail=50 || echo "::warning::sin logs del sidecar"

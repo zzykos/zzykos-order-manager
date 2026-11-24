@@ -3,5 +3,6 @@ kind: Namespace
 metadata:
   name: order-manager
   labels:
+    istio-injection: enabled
     pod-security.kubernetes.io/enforce: restricted
     pod-security.kubernetes.io/enforce-version: latest

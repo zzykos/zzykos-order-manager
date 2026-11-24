@@ -10,11 +10,13 @@ labels:
 
 resources:
   - namespace.yaml
+  - serviceaccount.yaml
   - configmap.yaml
   - postgres.yaml
   - app.yaml
   - scaling.yaml
   - network-policy.yaml
+  - istio
 
 images:
   - name: order-manager

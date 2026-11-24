@@ -11,6 +11,8 @@ Argumentos:
   BASE_URL            URL del gateway (por defecto $SMOKE_BASE_URL o http://localhost:8098)
 
 Variables de entorno:
+  GATEWAY_KIND        nginx (por defecto) o istio. Con istio se valida la cabecera nativa
+                      x-envoy-upstream-service-time y el balanceo se mide en slo-gate.sh con Prometheus
   EXPECTED_REPLICAS   Replicas distintas que deben responder tras el gateway (por defecto 1)
   EXPECTED_COMMIT     Commit esperado en /actuator/info (por defecto $GIT_COMMIT; vacio omite la prueba)
   LB_SAMPLES          Peticiones usadas para verificar el balanceo (por defecto 20)
@@ -42,6 +44,7 @@ fi
 BASE_URL="${1:-${SMOKE_BASE_URL:-http://localhost:8098}}"
 BASE_URL="${BASE_URL%/}"
 readonly BASE_URL
+readonly GATEWAY_KIND="${GATEWAY_KIND:-nginx}"
 readonly EXPECTED_REPLICAS="${EXPECTED_REPLICAS:-1}"
 readonly EXPECTED_COMMIT="${EXPECTED_COMMIT:-${GIT_COMMIT:-}}"
 readonly LB_SAMPLES="${LB_SAMPLES:-20}"
@@ -50,6 +53,7 @@ readonly READY_RETRIES="${READY_RETRIES:-10}"
 readonly READY_INTERVAL="${READY_INTERVAL:-3}"
 
 [[ "$BASE_URL" =~ ^https?://[^[:space:]]+$ ]] || die "BASE_URL invalida: '$BASE_URL'"
+[[ "$GATEWAY_KIND" == "nginx" || "$GATEWAY_KIND" == "istio" ]] || die "GATEWAY_KIND debe ser nginx o istio (valor: '$GATEWAY_KIND')"
 require_uint EXPECTED_REPLICAS "$EXPECTED_REPLICAS"
 require_uint LB_SAMPLES "$LB_SAMPLES"
 require_uint CURL_TIMEOUT "$CURL_TIMEOUT"
@@ -193,13 +197,22 @@ test_health() {
 }
 
 test_gateway() {
-  local request_id
+  local request_id upstream_time
   request GET /actuator/health
-  request_id="$(header_value X-Request-Id)"
-  if [[ "$HTTP_CODE" == "200" && -n "$request_id" ]]; then
-    record PASS "Gateway propaga X-Request-Id" "X-Request-Id: $request_id"
+  if [[ "$GATEWAY_KIND" == "istio" ]]; then
+    upstream_time="$(header_value x-envoy-upstream-service-time)"
+    if [[ "$HTTP_CODE" == "200" && "$upstream_time" =~ ^[0-9]+$ ]]; then
+      record PASS "Ingress gateway de Istio enruta al servicio" "x-envoy-upstream-service-time: ${upstream_time} ms"
+    else
+      record FAIL "Ingress gateway de Istio enruta al servicio" "HTTP $HTTP_CODE, x-envoy-upstream-service-time='${upstream_time}' ${TRANSPORT_ERROR}"
+    fi
   else
-    record FAIL "Gateway propaga X-Request-Id" "HTTP $HTTP_CODE, cabecera ausente ${TRANSPORT_ERROR}"
+    request_id="$(header_value X-Request-Id)"
+    if [[ "$HTTP_CODE" == "200" && -n "$request_id" ]]; then
+      record PASS "Gateway propaga X-Request-Id" "X-Request-Id: $request_id"
+    else
+      record FAIL "Gateway propaga X-Request-Id" "HTTP $HTTP_CODE, cabecera ausente ${TRANSPORT_ERROR}"
+    fi
   fi
 
   request GET /actuator/env
@@ -305,7 +318,11 @@ main() {
   test_gateway
   test_order_flow
   test_error_handling
-  test_load_balancing
+  if [[ "$GATEWAY_KIND" == "nginx" ]]; then
+    test_load_balancing
+  else
+    printf 'Balanceo entre replicas: se evalua en slo-gate.sh con metricas de Istio por pod\n'
+  fi
   write_summary
   printf 'Resultado: %d aprobadas, %d fallidas\n' "$PASSED" "$FAILED"
   (( FAILED == 0 )) || exit 1

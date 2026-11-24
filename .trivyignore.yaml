@@ -13,3 +13,15 @@ vulnerabilities:
       La API no expone endpoints SSE ni usa vistas.
       Corrección solo en Spring Framework 7 (Spring Boot 4).
     expired_at: 2027-01-31
+
+misconfigurations:
+  - id: KSV-0125
+    paths:
+      - observability/pushgateway/pushgateway.yaml
+    statement: >-
+      Riesgo mitigado: la regla solo considera confiables registros privados de nube
+      (ECR, GCR, ACR). Pushgateway es la imagen oficial del proyecto Prometheus, publicada
+      unicamente en Docker Hub; la fijamos por version y digest SHA-256 inmutable, corre en
+      istio-system sin exposicion externa y no procesa datos de usuarios. Replica en Amazon
+      ECR planificada al habilitar un registro privado fuera del Learner Lab.
+    expired_at: 2027-01-31

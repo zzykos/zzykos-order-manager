@@ -1,0 +1,88 @@
+data:
+  recording_rules.yml: |
+    groups:
+      - name: order-manager-recording
+        interval: 30s
+        rules:
+          - record: order_manager:requests:rate5m
+            expr: sum(rate(istio_requests_total{reporter="destination",destination_workload_namespace="order-manager",destination_workload="order-manager"}[5m]))
+          - record: order_manager:errors_5xx:rate5m
+            expr: sum(rate(istio_requests_total{reporter="destination",destination_workload_namespace="order-manager",destination_workload="order-manager",response_code=~"5.."}[5m])) or vector(0)
+          - record: order_manager:availability:ratio5m
+            expr: 1 - (order_manager:errors_5xx:rate5m / clamp_min(order_manager:requests:rate5m, 1e-9))
+          - record: order_manager:latency_p95_ms:5m
+            expr: histogram_quantile(0.95, sum by (le) (rate(istio_request_duration_milliseconds_bucket{reporter="destination",destination_workload_namespace="order-manager",destination_workload="order-manager"}[5m])))
+          - record: order_manager:cpu_cores:rate2m
+            expr: sum by (pod, container) (rate(container_cpu_usage_seconds_total{namespace="order-manager",container!="",container!="POD"}[2m]))
+          - record: order_manager:memory_working_set_bytes
+            expr: sum by (pod, container) (container_memory_working_set_bytes{namespace="order-manager",container!="",container!="POD"})
+  alerting_rules.yml: |
+    groups:
+      - name: order-manager-slo
+        rules:
+          - alert: OrderManagerAvailabilityBelowSLO
+            expr: order_manager:availability:ratio5m < 0.99 and order_manager:requests:rate5m > 0
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: Disponibilidad de order-manager bajo el SLO de 99 por ciento
+              description: "Disponibilidad actual {{ $value | humanizePercentage }} en los ultimos 5 minutos."
+          - alert: OrderManagerHighLatencyP95
+            expr: order_manager:latency_p95_ms:5m > 1000
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: Latencia p95 de order-manager sobre 1 segundo
+              description: "p95 actual {{ $value | humanize }} ms."
+          - alert: OrderManagerNoHealthyTargets
+            expr: absent(up{job="kubernetes-pods",namespace="order-manager",app_kubernetes_io_name="order-manager"} == 1)
+            for: 2m
+            labels:
+              severity: critical
+            annotations:
+              summary: No hay replicas de order-manager entregando metricas
+              description: Prometheus no logra extraer metricas de ninguna replica de order-manager.
+          - alert: OrderManagerErrorLogs
+            expr: sum(increase(logback_events_total{namespace="order-manager",level="error"}[10m])) > 10
+            for: 0m
+            labels:
+              severity: warning
+            annotations:
+              summary: Aumento de errores registrados en logs de order-manager
+              description: "{{ $value | humanize }} eventos ERROR en 10 minutos."
+          - alert: OrderManagerMemoryNearLimit
+            expr: max(order_manager:memory_working_set_bytes{container="order-manager"}) > 0.9 * 805306368
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: Memoria de order-manager sobre el 90 por ciento del limite
+              description: "Uso maximo {{ $value | humanize1024 }}B de 768MiB."
+      - name: cicd-quality
+        rules:
+          - alert: CicdPipelineBlocked
+            expr: max by (environment) (cicd_pipeline_success) == 0
+            for: 0m
+            labels:
+              severity: warning
+            annotations:
+              summary: El ultimo pipeline CI/CD fue bloqueado por un control de calidad o seguridad
+              description: "Entorno {{ $labels.environment }}."
+          - alert: CicdCoverageBelowThreshold
+            expr: max(cicd_test_coverage_ratio) < 0.8
+            for: 0m
+            labels:
+              severity: warning
+            annotations:
+              summary: Cobertura de pruebas bajo el umbral de 80 por ciento
+              description: "Cobertura actual {{ $value | humanizePercentage }}."
+          - alert: CicdDeploymentRolledBack
+            expr: max(cicd_deploy_rolled_back) == 1
+            for: 0m
+            labels:
+              severity: critical
+            annotations:
+              summary: El ultimo despliegue fue revertido automaticamente
+              description: La verificacion post-despliegue detecto una regresion y se ejecuto rollback.
