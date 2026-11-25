@@ -233,7 +233,7 @@ El pipeline ejecuta de manera automatizada **55 pruebas** (unitarias, de control
 
 ## Trazabilidad y Despliegue
 
-Se implementó un entorno _cloud simulado_ utilizando Docker Compose corriendo directamente en los _runners_ de GitHub Actions. En la sección de [_Deployments_](https://github.com/zzykos/zzykos-order-manager/deployments) del repositorio se puede observar el estado de los dos entornos principales: **staging** y **produccion-simulada**.
+Se implementó un entorno _cloud simulado_ utilizando Docker Compose corriendo directamente en los _runners_ de GitHub Actions. En la sección de [_Deployments_](https://github.com/zzykos/zzykos-order-manager/deployments) del repositorio se puede observar el estado de los dos entornos: **staging** (Docker Compose en el runner) y **produccion-eks** (Amazon EKS con Istio).
 
 Ejemplo de respuesta:
 
@@ -356,25 +356,154 @@ Pasos iniciales:
 
 ## Evidencias del Proyecto
 
-- **Pipeline exitoso:** [Ejecución #40329926042 en Actions](https://github.com/zzykos/zzykos-order-manager/actions/runs/40329926042)
-- **Bloqueo por seguridad resuelto:** [Issue #4](https://github.com/zzykos/zzykos-order-manager/issues/4)
-- **Imágenes Docker:** [Paquete en GitHub Container Registry](https://github.com/zzykos/zzykos-order-manager/pkgs/container/zzykos-order-manager)
-- **Deployments:** [Historial de despliegues](https://github.com/zzykos/zzykos-order-manager/deployments) por entorno (staging / produccion-simulada).
+El clúster `cluster-istio` se eliminó al terminar la evaluación para no consumir créditos del Learner Lab. Las capturas siguientes se tomaron con el sistema en funcionamiento y quedan versionadas en [`docs/evidencias/ep3`](docs/evidencias/ep3).
+
+### Ejecuciones y cambios en GitHub
+
+|Evidencia|Enlace|
+|---|---|
+|Pipelines completos hasta el despliegue en EKS|[45496800313](https://github.com/zzykos/zzykos-order-manager/actions/runs/45496800313), [45503561496](https://github.com/zzykos/zzykos-order-manager/actions/runs/45503561496), [45509443270](https://github.com/zzykos/zzykos-order-manager/actions/runs/45509443270)|
+|Detenciones reales en producción|[45492176727](https://github.com/zzykos/zzykos-order-manager/actions/runs/45492176727) (pods rechazados por la política de seguridad), [45498677128](https://github.com/zzykos/zzykos-order-manager/actions/runs/45498677128) (gate de SLO con rollback automático)|
+|Demostración de bloqueo|[Cobertura insuficiente](https://github.com/zzykos/zzykos-order-manager/actions/runs/45500201445), [dependencia vulnerable](https://github.com/zzykos/zzykos-order-manager/actions/runs/45498720335), [manifiesto inseguro](https://github.com/zzykos/zzykos-order-manager/actions/runs/45498741311), [mTLS desactivado](https://github.com/zzykos/zzykos-order-manager/actions/runs/45498125286)|
+|Pull requests|[#8](https://github.com/zzykos/zzykos-order-manager/pull/8) (service mesh, métricas y políticas) y [#9](https://github.com/zzykos/zzykos-order-manager/pull/9) a [#12](https://github.com/zzykos/zzykos-order-manager/pull/12) (correcciones, cada una con su causa)|
+|Imágenes Docker|[Paquete en GitHub Container Registry](https://github.com/zzykos/zzykos-order-manager/pkgs/container/zzykos-order-manager)|
+|Despliegues|[Historial por entorno](https://github.com/zzykos/zzykos-order-manager/deployments) (staging / produccion-eks)|
+|Bloqueo por seguridad de la EP2|[Issue #4](https://github.com/zzykos/zzykos-order-manager/issues/4)|
+
+**Verificación final antes de eliminar el clúster:** malla 6/6, pruebas de humo 17/17, SLO con 0 % de errores 5xx, latencia p95 de 17 ms y tráfico en 2 pods. Cobertura 94,6 %, 55 pruebas, 0 vulnerabilidades HIGH/CRITICAL y despliegue en 193 s.
+
+### IE1 · Monitoreo y logging
+
+![Grafo de tráfico en Kiali](docs/evidencias/ep3/01-kiali-grafo-trafico.png)
+
+Grafo de Kiali: ingress gateway → `order-manager` → `postgres`. El candado en cada conexión indica tráfico cifrado con mTLS.
+
+![Resumen de la malla en Kiali](docs/evidencias/ep3/02-kiali-overview.png)
+
+Resumen de los namespaces y estado de salud de la malla.
+
+![Trazas en Jaeger](docs/evidencias/ep3/06-jaeger-trazas.png)
+
+Trazas distribuidas de las solicitudes que recibe el microservicio.
+
+![Detalle de una traza](docs/evidencias/ep3/07-jaeger-traza-detalle.png)
+
+Detalle de una traza: tiempo que pasa la solicitud en el gateway y en `order-manager`.
+
+![Alertas en Prometheus](docs/evidencias/ep3/08-prometheus-alertas.png)
+
+Reglas de alerta de SLO y de calidad del pipeline cargadas en Prometheus.
+
+![Objetivos de Prometheus](docs/evidencias/ep3/09-prometheus-objetivos.png)
+
+Objetivos que Prometheus recolecta: pods, nodos y Pushgateway con las métricas del pipeline.
+
+![CPU de los nodos en CloudWatch](docs/evidencias/ep3/13-cloudwatch-cpu-nodos-alarma.png)
+
+CPU de los nodos con el umbral de la alarma en 80 %.
+
+![Disponibilidad de los pods en CloudWatch](docs/evidencias/ep3/15-cloudwatch-disponibilidad-pods.png)
+
+Pods en ejecución y reinicios (disponibilidad).
+
+![Errores en los logs](docs/evidencias/ep3/16-cloudwatch-errores-en-logs.png)
+
+Errores contados desde los logs centralizados mediante un filtro de métricas.
+
+![Alarmas y notificación SNS](docs/evidencias/ep3/17-cloudwatch-alarmas-sns.png)
+
+Estado de las 5 alarmas y suscripción SNS por correo confirmada.
+
+### IE2 · Despliegue en Kubernetes en la nube
+
+![Workloads en Kiali](docs/evidencias/ep3/03-kiali-workloads.png)
+
+Workloads de `order-manager` en EKS, cada uno con el sidecar de Istio inyectado.
+
+![Pipeline exitoso hasta EKS](docs/evidencias/ep3/10-github-pipeline-exitoso.png)
+
+Pipeline CI/CD completo en verde: pruebas, seguridad, políticas, construcción, staging y producción en EKS.
+
+### IE3 · Dashboard con métricas clave
+
+![Dashboard Order Manager - DevOps](docs/evidencias/ep3/05-grafana-dashboard-devops.png)
+
+Dashboard de Grafana: resultado del pipeline, cobertura, tiempo de despliegue, vulnerabilidades, disponibilidad, latencia, errores, CPU y memoria.
+
+![CPU y memoria del pod](docs/evidencias/ep3/14-cloudwatch-cpu-memoria-pod.png)
+
+CPU y memoria del pod en CloudWatch Container Insights.
+
+### IE5 · Políticas de cumplimiento
+
+![Validación de Istio en Kiali](docs/evidencias/ep3/04-kiali-validacion-istio.png)
+
+Recursos de Istio validados sin errores: Gateway, VirtualService, DestinationRule, PeerAuthentication, AuthorizationPolicy y Sidecar.
+
+### IE6 · Detención automática del pipeline
+
+![Rollback automático](docs/evidencias/ep3/11-github-rollback-automatico.png)
+
+Despliegue detenido por el gate de SLO, con rollback automático a la revisión anterior.
+
+![Bloqueo por cobertura insuficiente](docs/evidencias/ep3/12-github-demo-bloqueo-cobertura.png)
+
+Cobertura bajo el umbral: JaCoCo falla y el despliegue queda omitido.
+
+![Bloqueo por dependencia vulnerable](docs/evidencias/ep3/12-github-demo-bloqueo-dependencia.png)
+
+Dependencia con CVE-2021-44228 (log4j): Trivy falla y el despliegue queda omitido.
+
+![Bloqueo por manifiesto inseguro](docs/evidencias/ep3/12-github-demo-bloqueo-manifiesto.png)
+
+Contenedor privilegiado: la política OPA falla y el despliegue queda omitido.
+
+![Bloqueo por mTLS desactivado](docs/evidencias/ep3/12-github-demo-bloqueo-mtls.png)
+
+PeerAuthentication en modo PERMISSIVE: la política OPA falla y el despliegue queda omitido.
 
 ## Declaración de uso de IA
 
-Para el desarrollo de este proyecto, se utilizó el modelo Claude Opus 5.5 exclusivamente como herramienta de apoyo para verificar el funcionamiento del código y corregir errores puntuales de sintaxis y ejecución. Toda la configuración de infraestructura, diseño del pipeline y redacción de esta documentación fue realizada de manera manual y sin intervención automatizada. _Cita: Anthropic. (2026). Claude Opus 5.5 [Modelo de lenguaje de gran tamaño]. [https://claude.ai](https://claude.ai)_
+Durante el desarrollo de la EP3 utilicé Claude (Anthropic), a través de Claude Code, como herramienta de apoyo técnico bajo mi dirección y supervisión directa. Su uso se enfocó en:
+
+- **Apoyo en sintaxis y plantillas:** Generación de estructuras base para los manifiestos de Kubernetes e Istio, reglas de políticas OPA/Rego y ajustes en los workflows de GitHub Actions, los cuales fui adaptando e integrando según los requerimientos del proyecto.
+- **Depuración y resolución de errores:** Asistencia en el diagnóstico de fallas de despliegue, políticas de red y permisos en Amazon EKS/Istio (documentadas y corregidas por mí en los PR #9 a #12).
+- **Estructuración de documentación:** Apoyo en la redacción y ordenamiento técnico de las bitácoras (`docs/fases/fase-11` y `fase-12`) y de este README a partir de los resultados obtenidos.
+
+Todas las decisiones de arquitectura, la configuración del repositorio, el despliegue y limpieza de la infraestructura en AWS, la ejecución de los pipelines y la validación de las evidencias fueron realizadas directamente por mí.
+
+_Cita: Anthropic. (2026). Claude Opus 5.5 [Modelo de lenguaje de gran tamaño]. https://claude.ai_
 
 ## Conclusiones y Reflexión Individual
 
-### Aprendizajes
+### Reflexión EP3: Jairo Omar Moraga Rodriguez
+
+#### Aprendizajes
+
+A lo largo de esta tercera entrega, aprendí cómo funciona la orquestación en Kubernetes junto con Istio y los controles automáticos de seguridad en un entorno cloud. Durante el proceso, comprendí que en infraestructura cualquier detalle mal configurado en un manifiesto puede detener todo el pipeline, por lo que contar con validaciones y rollback automático evita errores graves en producción.
+
+#### Aporte individual
+
+Mi aporte consistió en configurar el despliegue hacia Amazon EKS dentro del pipeline, implementar las políticas de cumplimiento con OPA e Istio, y levantar el monitoreo en Prometheus, Grafana y CloudWatch para verificar que el microservicio funcionara correctamente antes de eliminar el clúster.
+
+#### Dificultades
+
+En cuanto a las dificultades técnicas, el mayor desafío fue trabajar con las limitaciones de AWS Academy Learner Lab y ajustar las reglas de mTLS y autorización de Istio sin bloquear el tráfico entre los servicios. Para solucionar estos problemas, revisé los registros de cada fallo en GitHub Actions y me apoyé en Claude para depurar las configuraciones de red hasta lograr que el despliegue pasara completo.
+
+#### Mejoras futuras
+
+En el futuro, me gustaría trabajar en un entorno productivo que no dependa de credenciales temporales que expiran en cada sesión y simplificar la cantidad de archivos YAML para facilitar el mantenimiento de la infraestructura.
+
+### Reflexión EP2
+
+#### Aprendizajes
 
 A lo largo del desarrollo de este proyecto, he aprendido el funcionamiento correcto de las metodologías CI/CD y la automatización de despliegues. Durante este proceso, comprendí la cantidad de veces que un pipeline puede fallar, asimilando que cada error es un avance en el aprendizaje y no un retroceso.
 
-### Dificultades
+#### Dificultades
 
 En cuanto a las dificultades técnicas, el mayor desafío fue configurar correctamente los volúmenes de Docker, ya que tuve muchos problemas para que el sistema los leyera de forma adecuada. Para solucionar este inconveniente, dediqué tiempo a revisar múltiples videos explicativos y consulté de manera específica a Claude Opus 5.5, lo que me permitió comprender la configuración necesaria.
 
-### Mejoras futuras
+#### Mejoras futuras
 
 En el futuro, me gustaría agregar herramientas de monitoreo adicionales para tener mayor visibilidad de la infraestructura y optimizar aún más el código del servicio.
